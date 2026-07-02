@@ -1,38 +1,44 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const PortfolioSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      unique: true
-    },
-    description: String,
-    holdings: [
-      {
-        etfId: mongoose.Schema.Types.ObjectId,
-        weight: {
-          type: Number,
-          required: true,
-          min: 0,
-          max: 100
-        }
-      }
-    ],
-    kpis: {
-      expectedReturn: Number,
-      volatility: Number,
-      maxDrawdown: Number,
-      recoveryMonths: Number,
-      robustness: Number
-    },
-    status: {
-      type: String,
-      enum: ['active', 'archived'],
-      default: 'active'
+const Portfolio = sequelize.define('Portfolio', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
+  name: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true
+  },
+  description: {
+    type: DataTypes.TEXT
+  },
+  holdings: {
+    type: DataTypes.JSONB,
+    allowNull: false,
+    defaultValue: [],
+    comment: 'Array of {etfId, weight}'
+  },
+  kpis: {
+    type: DataTypes.JSONB,
+    defaultValue: {
+      expectedReturn: null,
+      volatility: null,
+      maxDrawdown: null,
+      recoveryMonths: null,
+      robustness: null
     }
   },
-  { timestamps: true }
-);
+  status: {
+    type: DataTypes.ENUM('active', 'archived'),
+    defaultValue: 'active'
+  }
+}, {
+  timestamps: true,
+  tableName: 'portfolios'
+});
 
-module.exports = mongoose.model('Portfolio', PortfolioSchema);
+module.exports = Portfolio;
+

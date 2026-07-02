@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const connectDB = require('./config/database');
+const { connectDB } = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
 const portfolioRoutes = require('./routes/portfolio');
 const etfRoutes = require('./routes/etf');
@@ -30,7 +30,8 @@ app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'OK',
     timestamp: new Date().toISOString(),
-    service: 'investment-lab-service'
+    service: 'investment-lab-service',
+    database: 'PostgreSQL'
   });
 });
 

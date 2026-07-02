@@ -1,34 +1,47 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const ETFSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      unique: true
-    },
-    ticker: {
-      type: String,
-      required: true,
-      unique: true
-    },
-    description: String,
-    assetClass: String,
-    expense: Number,
-    historicalData: [
-      {
-        date: Date,
-        price: Number,
-        return: Number
-      }
-    ],
-    metrics: {
-      yield: Number,
-      volatility: Number,
-      beta: Number
-    }
+const ETF = sequelize.define('ETF', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
   },
-  { timestamps: true }
-);
+  name: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true
+  },
+  ticker: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    unique: true
+  },
+  description: {
+    type: DataTypes.TEXT
+  },
+  assetClass: {
+    type: DataTypes.STRING
+  },
+  expense: {
+    type: DataTypes.DECIMAL(10, 4)
+  },
+  historicalData: {
+    type: DataTypes.JSONB,
+    defaultValue: []
+  },
+  metrics: {
+    type: DataTypes.JSONB,
+    defaultValue: {
+      yield: null,
+      volatility: null,
+      beta: null
+    }
+  }
+}, {
+  timestamps: true,
+  tableName: 'etfs'
+});
 
-module.exports = mongoose.model('ETF', ETFSchema);
+module.exports = ETF;
+

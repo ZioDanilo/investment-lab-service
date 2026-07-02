@@ -1,20 +1,32 @@
-const mongoose = require('mongoose');
+const { Sequelize } = require('sequelize');
+
+const sequelize = new Sequelize(process.env.DATABASE_URL, {
+  dialect: 'postgres',
+  protocol: 'postgres',
+  logging: process.env.NODE_ENV === 'development' ? console.log : false,
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false
+    }
+  }
+});
 
 const connectDB = async () => {
   try {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/investment-lab';
+    await sequelize.authenticate();
+    console.log('PostgreSQL Connected:', process.env.DATABASE_URL.split('@')[1]);
     
-    await mongoose.connect(mongoURI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true
-    });
-
-    console.log('MongoDB Connected:', mongoURI);
-    return mongoose.connection;
+    // Sync models with database
+    await sequelize.sync({ alter: process.env.NODE_ENV === 'development' });
+    console.log('Database models synced');
+    
+    return sequelize;
   } catch (error) {
-    console.error('MongoDB Connection Error:', error.message);
+    console.error('Database Connection Error:', error.message);
     process.exit(1);
   }
 };
 
-module.exports = connectDB;
+module.exports = { sequelize, connectDB };
+
