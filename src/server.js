@@ -18,10 +18,16 @@ connectDB();
 // Middleware
 app.use(helmet());
 app.use(morgan('dev'));
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:4200',
-  credentials: true
-}));
+
+// CORS Configuration - Development is permissive
+const corsOptions = process.env.NODE_ENV === 'development' 
+  ? { origin: true, credentials: true }
+  : {
+      origin: process.env.FRONTEND_URL || 'http://localhost:4200',
+      credentials: true
+    };
+
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
