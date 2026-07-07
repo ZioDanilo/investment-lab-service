@@ -1,4 +1,4 @@
-const { Sequelize } = require('sequelize');
+const { Sequelize, Op } = require('sequelize');
 
 const sequelize = new Sequelize(process.env.DATABASE_URL, {
   dialect: 'postgres',
@@ -17,8 +17,31 @@ const connectDB = async () => {
     await sequelize.authenticate();
     console.log('PostgreSQL Connected:', process.env.DATABASE_URL.split('@')[1]);
     
+    // Import models
+    const ETF = require('../models/ETF');
+    const Portafoglio = require('../models/Portafoglio');
+    const PortafoglioEtf = require('../models/PortafoglioEtf');
+
+    // Define associations
+    Portafoglio.hasMany(PortafoglioEtf, { 
+      foreignKey: 'portafoglioId', 
+      as: 'etfs',
+      onDelete: 'CASCADE'
+    });
+    PortafoglioEtf.belongsTo(Portafoglio, { 
+      foreignKey: 'portafoglioId' 
+    });
+    
+    PortafoglioEtf.belongsTo(ETF, { 
+      foreignKey: 'etfId', 
+      as: 'etf' 
+    });
+    ETF.hasMany(PortafoglioEtf, { 
+      foreignKey: 'etfId' 
+    });
+    
     // Sync models with database
-    await sequelize.sync({ alter: process.env.NODE_ENV === 'development' });
+    await sequelize.sync({ alter: false });
     console.log('Database models synced');
     
     return sequelize;
@@ -28,5 +51,5 @@ const connectDB = async () => {
   }
 };
 
-module.exports = { sequelize, connectDB };
+module.exports = { sequelize, connectDB, Op };
 

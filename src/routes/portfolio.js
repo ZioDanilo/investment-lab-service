@@ -1,11 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
+const portafoglioController = require('../controllers/portafoglioController');
 
-router.get('/', portfolioController.getPortfolios);
-router.get('/:id', portfolioController.getPortfolioById);
-router.post('/', portfolioController.createPortfolio);
-router.put('/:id', portfolioController.updatePortfolio);
-router.delete('/:id', portfolioController.deletePortfolio);
+// Old portfolio endpoints
+router.get('/old', portfolioController.getPortfolios);
+router.get('/old/:id', portfolioController.getPortfolioById);
+router.post('/old', portfolioController.createPortfolio);
+router.put('/old/:id', portfolioController.updatePortfolio);
+router.delete('/old/:id', portfolioController.deletePortfolio);
+
+// New saved portfolios endpoints
+router.get('/search-etf', portafoglioController.searchETF);
+router.post('/', portafoglioController.savePortafoglio);
+router.get('/', portafoglioController.getPortafogli);
+router.get('/:id', portafoglioController.getPortafoglioById);
+router.put('/:id', portafoglioController.updatePortafoglio);
 
 module.exports = router;
