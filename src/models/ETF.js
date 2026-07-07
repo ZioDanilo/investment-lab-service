@@ -7,18 +7,23 @@ const ETF = sequelize.define('ETF', {
     defaultValue: DataTypes.UUIDV4,
     primaryKey: true
   },
-  name: {
+  isin: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true
+    unique: true,
+    comment: 'International Securities Identification Number'
+  },
+  name: {
+    type: DataTypes.STRING,
+    allowNull: false
   },
   ticker: {
     type: DataTypes.STRING,
-    allowNull: false,
     unique: true
   },
   description: {
-    type: DataTypes.TEXT
+    type: DataTypes.TEXT,
+    allowNull: false
   },
   assetClass: {
     type: DataTypes.STRING
@@ -40,7 +45,7 @@ const ETF = sequelize.define('ETF', {
   }
 }, {
   timestamps: true,
-  tableName: 'etfs'
+  tableName: 'anagrafica_etf'
 });
 
 module.exports = ETF;
