@@ -12,6 +12,20 @@ exports.getETFs = async (req, res, next) => {
   }
 };
 
+exports.getETFsSimple = async (req, res, next) => {
+  try {
+    const etfs = await ETF.findAll({
+      attributes: ['id', 'isin', 'name', 'description']
+    });
+    res.status(200).json({
+      success: true,
+      data: etfs
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.getETFById = async (req, res, next) => {
   try {
     const etf = await ETF.findByPk(req.params.id);

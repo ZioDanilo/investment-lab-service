@@ -2,6 +2,10 @@ const express = require('express');
 const router = express.Router();
 const etfController = require('../controllers/etfController');
 
+// Specific routes first
+router.get('/list/simple', etfController.getETFsSimple);
+
+// Generic routes after
 router.get('/', etfController.getETFs);
 router.get('/:id', etfController.getETFById);
 router.post('/', etfController.createETF);
