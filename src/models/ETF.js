@@ -10,7 +10,10 @@ const ETF = sequelize.define('ETF', {
   isin: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true,
+    unique: {
+      name: 'unique_isin',
+      msg: 'ISIN deve essere unico'
+    },
     comment: 'International Securities Identification Number'
   },
   name: {
@@ -18,8 +21,7 @@ const ETF = sequelize.define('ETF', {
     allowNull: false
   },
   ticker: {
-    type: DataTypes.STRING,
-    unique: true
+    type: DataTypes.STRING
   },
   description: {
     type: DataTypes.TEXT,
@@ -45,8 +47,16 @@ const ETF = sequelize.define('ETF', {
   }
 }, {
   timestamps: true,
-  tableName: 'anagrafica_etf'
+  tableName: 'anagrafica_etf',
+  indexes: [
+    {
+      unique: true,
+      fields: ['isin'],
+      name: 'unique_isin_idx'
+    }
+  ]
 });
 
 module.exports = ETF;
+
 
