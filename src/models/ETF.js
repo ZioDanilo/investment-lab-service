@@ -20,6 +20,10 @@ const ETF = sequelize.define('ETF', {
     type: DataTypes.STRING,
     allowNull: false
   },
+  nickname: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   ticker: {
     type: DataTypes.STRING
   },
@@ -44,6 +48,21 @@ const ETF = sequelize.define('ETF', {
       volatility: null,
       beta: null
     }
+  },
+  longTermExpectedReturn: {
+    type: DataTypes.DECIMAL(7, 4),
+    allowNull: true,
+    comment: 'Long-term expected CAGR target (e.g., 0.08 = 8%). Used for Monte Carlo calibration.'
+  },
+  calibratedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    comment: 'Timestamp of last calibration run. Null = not yet calibrated.'
+  },
+  lastCalibrationMedianCagr: {
+    type: DataTypes.DECIMAL(7, 4),
+    allowNull: true,
+    comment: 'Median CAGR from the most recent calibration (diagnostic only).'
   }
 }, {
   timestamps: true,

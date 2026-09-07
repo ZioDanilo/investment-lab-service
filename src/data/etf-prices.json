@@ -1,0 +1,30 @@
+[
+  {
+    "date": "2026-07-10",
+    "ticker": "MVOL.L",
+    "isin": "IE00B8FHGS14",
+    "price": 65.73,
+    "source": "justetf"
+  },
+  {
+    "date": "2026-07-09",
+    "ticker": "MVOL.L",
+    "isin": "IE00B8FHGS14",
+    "price": 65.59,
+    "source": "justetf"
+  },
+  {
+    "date": "2026-07-10",
+    "ticker": "XMOM.L",
+    "isin": "IE00BP3QZ825",
+    "price": null,
+    "source": "pending"
+  },
+  {
+    "date": "2026-07-09",
+    "ticker": "XMOM.L",
+    "isin": "IE00BP3QZ825",
+    "price": null,
+    "source": "pending"
+  }
+]

@@ -2,8 +2,41 @@ const { sequelize, Op } = require('../config/database');
 const Portafoglio = require('../models/Portafoglio');
 const PortafoglioEtf = require('../models/PortafoglioEtf');
 const ETF = require('../models/ETF');
+const EtfMacroStatistics = require('../models/EtfMacroStatistics');
 
-// Search ETF by ISIN or description (partial match from 3rd char, max 5 results)
+// Helper to format macro stats into nested object
+// NEW SCHEMA: EtfMacroStatistics has 4 records per ETF (one per scenario)
+// Compose them back into nested object for frontend
+const formatMacroStatistics = (msArray) => {
+  if (!msArray || !Array.isArray(msArray) || msArray.length === 0) {
+    return undefined;
+  }
+
+  // Convert array of 4 records into nested object
+  const result = {};
+  
+  for (const ms of msArray) {
+    const scenario = ms.macroScenario || ms.macro_scenario;
+    if (!scenario) continue;
+    
+    // Map scenario name (soft_landing stored as-is in DB)
+    const scenarioKey = scenario === 'soft_landing' ? 'softLanding' : scenario;
+    
+    result[scenarioKey] = {
+      expectedReturn: parseFloat(ms.expectedReturn) / 100,  // Convert percentage to decimal
+      volatility: parseFloat(ms.volatility) / 100,
+      maxDrawdown: parseFloat(ms.maxDrawdown) / 100,
+      returnRange: {
+        min: parseFloat(ms.returnRangeMin) / 100,
+        max: parseFloat(ms.returnRangeMax) / 100
+      }
+    };
+  }
+  
+  return result;
+};
+
+// Search ETF by ISIN or description (partial match from 3rd char, max 30 results)
 exports.searchETF = async (req, res, next) => {
   try {
     const { q } = req.query;
@@ -16,13 +49,13 @@ exports.searchETF = async (req, res, next) => {
     }
 
     const etfs = await ETF.findAll({
-      attributes: ['id', 'isin', 'name', 'description', 'ticker'],
+      attributes: ['id', 'isin', 'name', 'nickname', 'description', 'ticker'],
       where: sequelize.where(
-        sequelize.fn('CONCAT', sequelize.col('isin'), ' ', sequelize.col('name'), ' ', sequelize.col('description')),
-        Op.iLike,
-        `%${q}%`
+        sequelize.fn('LOWER', sequelize.fn('CONCAT', sequelize.col('isin'), ' ', sequelize.col('name'), ' ', sequelize.col('description'))),
+        Op.like,
+        `%${q.toLowerCase()}%`
       ),
-      limit: 5
+      limit: 30
     });
 
     res.status(200).json({
@@ -71,7 +104,12 @@ exports.getPortafoglioById = async (req, res, next) => {
         include: [{
           model: ETF,
           as: 'etf',
-          attributes: ['id', 'isin', 'name', 'description', 'ticker']
+          include: [{
+            model: EtfMacroStatistics,
+            as: 'macroStats',
+            required: false,
+            attributes: ['isin', 'macroScenario', 'expectedReturn', 'volatility', 'maxDrawdown', 'returnRangeMin', 'returnRangeMax']
+          }]
         }]
       }]
     });
@@ -83,9 +121,32 @@ exports.getPortafoglioById = async (req, res, next) => {
       });
     }
 
+    // Format response: flatten holdings with macroStatistics (now array of 4 records)
+    const plain = portafoglio.toJSON();
+    if (plain.etfs) {
+      plain.holdings = plain.etfs.map(pe => {
+        const etf = pe.etf || {};
+        const msArray = etf.macroStats;  // Now an array
+        return {
+          id: etf.id,
+          etfId: etf.id,
+          isin: etf.isin,
+          name: etf.name,
+          description: etf.description,
+          ticker: etf.ticker,
+          nickname: etf.nickname || etf.name || etf.ticker || etf.isin,
+          fullName: etf.name || etf.description || etf.nickname || etf.isin,
+          expense: etf.expense,
+          weight: parseFloat(pe.peso) / 100,  // Convert percentage to decimal
+          macroStatistics: formatMacroStatistics(msArray)
+        };
+      });
+      delete plain.etfs;
+    }
+
     res.status(200).json({
       success: true,
-      data: portafoglio
+      data: plain
     });
   } catch (error) {
     next(error);
@@ -209,6 +270,35 @@ exports.updatePortafoglio = async (req, res, next) => {
     res.status(200).json({
       success: true,
       data: updatedPortafoglio
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Delete portfolio
+exports.deletePortafoglio = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // Find portafoglio
+    const portafoglio = await Portafoglio.findByPk(id);
+    if (!portafoglio) {
+      return res.status(404).json({
+        success: false,
+        error: 'Portafoglio non trovato'
+      });
+    }
+
+    // Delete ETFs associated with portafoglio (cascade)
+    await PortafoglioEtf.destroy({ where: { portafoglioId: id } });
+
+    // Delete portafoglio
+    await portafoglio.destroy();
+
+    res.status(200).json({
+      success: true,
+      message: 'Portafoglio eliminato con successo'
     });
   } catch (error) {
     next(error);

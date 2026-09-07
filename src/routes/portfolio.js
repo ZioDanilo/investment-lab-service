@@ -16,5 +16,6 @@ router.post('/', portafoglioController.savePortafoglio);
 router.get('/', portafoglioController.getPortafogli);
 router.get('/:id', portafoglioController.getPortafoglioById);
 router.put('/:id', portafoglioController.updatePortafoglio);
+router.delete('/:id', portafoglioController.deletePortafoglio);
 
 module.exports = router;

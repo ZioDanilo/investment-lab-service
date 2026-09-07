@@ -9,23 +9,54 @@ const portfolioRoutes = require('./routes/portfolio');
 const etfRoutes = require('./routes/etf');
 const kpiRoutes = require('./routes/kpi');
 const rebalanceRoutes = require('./routes/rebalance');
+const correlationsRoutes = require('./routes/correlations');
+const quotationRoutes = require('./routes/quotation');
+const monteCarloRoutes = require('./routes/montecarlo');
 
 const app = express();
 
 // Connect to Database
 connectDB();
 
+// Setup Sequelize associations
+const ETF = require('./models/ETF');
+const EtfMacroStatistics = require('./models/EtfMacroStatistics');
+const EtfCorrelation = require('./models/EtfCorrelation');
+
+// UPDATED: One ETF has many MacroStatistics (4 records, one per scenario)
+ETF.hasMany(EtfMacroStatistics, { foreignKey: 'isin', sourceKey: 'isin', as: 'macroStats' });
+EtfMacroStatistics.belongsTo(ETF, { foreignKey: 'isin', targetKey: 'isin' });
+
 // Middleware
 app.use(helmet());
 app.use(morgan('dev'));
 
-// CORS Configuration - Development is permissive
-const corsOptions = process.env.NODE_ENV === 'development' 
-  ? { origin: true, credentials: true }
-  : {
-      origin: process.env.FRONTEND_URL || 'http://localhost:4200',
-      credentials: true
-    };
+// CORS Configuration - allow Angular dev server and localhost variations
+const allowedOrigins = new Set([
+  'http://localhost:4200',
+  'http://127.0.0.1:4200',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+]);
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.has(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    if (process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
 
 app.use(cors(corsOptions));
 app.use(express.json());
@@ -46,6 +77,9 @@ app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/etf', etfRoutes);
 app.use('/api/kpi', kpiRoutes);
 app.use('/api/rebalance', rebalanceRoutes);
+app.use('/api/correlations', correlationsRoutes);
+app.use('/api/quotations', quotationRoutes);
+app.use('/api/monte-carlo', monteCarloRoutes);
 
 // 404 Handler
 app.use((req, res) => {
