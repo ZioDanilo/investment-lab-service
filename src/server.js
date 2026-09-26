@@ -12,6 +12,7 @@ const rebalanceRoutes = require('./routes/rebalance');
 const correlationsRoutes = require('./routes/correlations');
 const quotationRoutes = require('./routes/quotation');
 const monteCarloRoutes = require('./routes/montecarlo');
+const marketUniverseRoutes = require('./routes/marketUniverse');
 
 const app = express();
 
@@ -19,13 +20,8 @@ const app = express();
 connectDB();
 
 // Setup Sequelize associations
-const ETF = require('./models/ETF');
-const EtfMacroStatistics = require('./models/EtfMacroStatistics');
-const EtfCorrelation = require('./models/EtfCorrelation');
-
-// UPDATED: One ETF has many MacroStatistics (4 records, one per scenario)
-ETF.hasMany(EtfMacroStatistics, { foreignKey: 'isin', sourceKey: 'isin', as: 'macroStats' });
-EtfMacroStatistics.belongsTo(ETF, { foreignKey: 'isin', targetKey: 'isin' });
+const { initializeAssociations } = require('./config/database');
+initializeAssociations();
 
 // Middleware
 app.use(helmet());
@@ -80,6 +76,7 @@ app.use('/api/rebalance', rebalanceRoutes);
 app.use('/api/correlations', correlationsRoutes);
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/monte-carlo', monteCarloRoutes);
+app.use('/api/market-universe', marketUniverseRoutes);
 
 // 404 Handler
 app.use((req, res) => {
