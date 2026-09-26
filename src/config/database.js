@@ -26,41 +26,86 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
   }
 });
 
+const initializeAssociations = () => {
+  const ETF = require('../models/ETF');
+  const Portafoglio = require('../models/Portafoglio');
+  const PortafoglioEtf = require('../models/PortafoglioEtf');
+  const EtfMacroStatistics = require('../models/EtfMacroStatistics');
+  const MarketUniverseRun = require('../models/MarketUniverseRun');
+  const MarketUniverseMonth = require('../models/MarketUniverseMonth');
+
+  if (!Portafoglio.associations.etfs) {
+    Portafoglio.hasMany(PortafoglioEtf, {
+      foreignKey: 'portafoglioId',
+      as: 'etfs',
+      onDelete: 'CASCADE'
+    });
+  }
+
+  if (!PortafoglioEtf.associations.portafoglio) {
+    PortafoglioEtf.belongsTo(Portafoglio, {
+      foreignKey: 'portafoglioId'
+    });
+  }
+
+  if (!PortafoglioEtf.associations.etf) {
+    PortafoglioEtf.belongsTo(ETF, {
+      foreignKey: 'etfId',
+      as: 'etf'
+    });
+  }
+
+  if (!ETF.associations.portafoglioEtfs) {
+    ETF.hasMany(PortafoglioEtf, {
+      foreignKey: 'etfId'
+    });
+  }
+
+  if (!ETF.associations.macroStats) {
+    ETF.hasMany(EtfMacroStatistics, {
+      foreignKey: 'isin',
+      sourceKey: 'isin',
+      as: 'macroStats'
+    });
+  }
+
+  if (!EtfMacroStatistics.associations.etf) {
+    EtfMacroStatistics.belongsTo(ETF, {
+      foreignKey: 'isin',
+      targetKey: 'isin'
+    });
+  }
+
+  if (!MarketUniverseRun.associations.months) {
+    MarketUniverseRun.hasMany(MarketUniverseMonth, {
+      foreignKey: 'runId',
+      as: 'months',
+      onDelete: 'CASCADE'
+    });
+  }
+
+  if (!MarketUniverseMonth.associations.marketUniverseRun) {
+    MarketUniverseMonth.belongsTo(MarketUniverseRun, {
+      foreignKey: 'runId',
+      targetKey: 'runId'
+    });
+  }
+};
+
 const connectDB = async () => {
   try {
+    initializeAssociations();
     await sequelize.authenticate();
     console.log('PostgreSQL Connected:', process.env.DATABASE_URL.split('@')[1]);
 
     // Import models
-    const ETF = require('../models/ETF');
-    const Portafoglio = require('../models/Portafoglio');
-    const PortafoglioEtf = require('../models/PortafoglioEtf');
     const EtfCorrelation = require('../models/EtfCorrelation');
-    const EtfMacroStatistics = require('../models/EtfMacroStatistics');
     const EtfQuotation = require('../models/EtfQuotation');
     const StructuralProbability = require('../models/StructuralProbability');
     const TransitionMatrix = require('../models/TransitionMatrix');
     const ScenarioInertiaConfiguration = require('../models/ScenarioInertiaConfiguration');
     const ScenarioIntensityConfiguration = require('../models/ScenarioIntensityConfiguration');
     const MonteCarloGlobalProperty = require('../models/MonteCarloGlobalProperty');
-
-    // Define associations
-    Portafoglio.hasMany(PortafoglioEtf, {
-      foreignKey: 'portafoglioId',
-      as: 'etfs',
-      onDelete: 'CASCADE'
-    });
-    PortafoglioEtf.belongsTo(Portafoglio, {
-      foreignKey: 'portafoglioId'
-    });
-
-    PortafoglioEtf.belongsTo(ETF, {
-      foreignKey: 'etfId',
-      as: 'etf'
-    });
-    ETF.hasMany(PortafoglioEtf, {
-      foreignKey: 'etfId'
-    });
 
     // Sync models with database
     try {
@@ -71,6 +116,10 @@ const connectDB = async () => {
       console.warn('Server continues with existing schema. Run manual migration if needed.');
     }
 
+    void EtfCorrelation;
+    void EtfQuotation;
+    void StructuralProbability;
+    void TransitionMatrix;
     void ScenarioInertiaConfiguration;
     void ScenarioIntensityConfiguration;
     void MonteCarloGlobalProperty;
@@ -82,5 +131,5 @@ const connectDB = async () => {
   }
 };
 
-module.exports = { sequelize, connectDB, Op };
+module.exports = { sequelize, connectDB, initializeAssociations, Op };
 
