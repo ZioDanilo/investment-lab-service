@@ -32,7 +32,8 @@ const allowedOrigins = new Set([
   'http://localhost:4200',
   'http://127.0.0.1:4200',
   'http://localhost:3000',
-  'http://127.0.0.1:3000'
+  'http://127.0.0.1:3000',
+  'https://investment-lab-x.pages.dev'
 ]);
 
 const corsOptions = {
