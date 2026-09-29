@@ -6,6 +6,8 @@ const EtfMacroStatistics = require('../models/EtfMacroStatistics');
 const EtfCorrelation = require('../models/EtfCorrelation');
 const MarketUniverseRun = require('../models/MarketUniverseRun');
 const MarketUniverseMonth = require('../models/MarketUniverseMonth');
+const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
+const { persistBinaryCache, loadBinaryCache } = require('./marketUniverseBinaryCache');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL, PAYLOAD_TYPE_RETURNS_ONLY } = require('../utils/marketUniverseBinaryTransport');
 
