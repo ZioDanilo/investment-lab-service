@@ -1,4 +1,3 @@
-const { Op } = require('sequelize');
 const MarketUniverseMonth = require('../models/MarketUniverseMonth');
 const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
 
@@ -63,8 +62,8 @@ const loadBinaryCache = async (activeRun, startedAt) => {
       error.statusCode = 409;
       throw error;
     }
-    returns.set(new Float64Array(rb.buffer, rb.byteOffset, returnLength), returnStart);
-    intensities.set(new Float64Array(ib.buffer, ib.byteOffset, monthLength), monthStart);
+    new Uint8Array(returns.buffer, returnStart * 8, rb.length).set(rb);
+    new Uint8Array(intensities.buffer, monthStart * 8, ib.length).set(ib);
     for (let i = 0; i < monthLength; i += 1) scenarios[monthStart + i] = SCENARIOS[sb[i]] || '';
     loadedPaths += chunkPaths;
   }
