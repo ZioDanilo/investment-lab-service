@@ -14,6 +14,8 @@ router.delete('/old/:id', portfolioController.deletePortfolio);
 router.get('/search-etf', portafoglioController.searchETF);
 router.post('/', portafoglioController.savePortafoglio);
 router.get('/', portafoglioController.getPortafogli);
+router.get('/:id/kpi-targets', portafoglioController.getKpiTargets);
+router.put('/:id/kpi-targets', portafoglioController.saveKpiTargets);
 router.get('/:id', portafoglioController.getPortafoglioById);
 router.put('/:id', portafoglioController.updatePortafoglio);
 router.delete('/:id', portafoglioController.deletePortafoglio);
