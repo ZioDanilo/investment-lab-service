@@ -1,4 +1,3 @@
-const MarketUniverseMonth = require('../models/MarketUniverseMonth');
 const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
 
 const SCENARIOS = ['expansion', 'soft_landing', 'recession', 'stagflation', 'general'];
