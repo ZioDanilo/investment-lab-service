@@ -346,6 +346,14 @@ class MarketUniverseServiceClass {
 
     const loadPromise = (async () => {
       const startedAt = Date.now();
+      const binaryCache = await loadBinaryCache(activeRun, startedAt);
+      if (binaryCache) {
+        this.activeUniverseCache = binaryCache;
+        this.activeUniverseStats.dbLoads = Number(this.activeUniverseStats.dbLoads || 0) + 1;
+        this.activeUniverseStats.lastLoadMs = Number(binaryCache.loadMs || 0);
+        return binaryCache;
+      }
+
       const pathCount = Number(activeRun.pathCount || 0);
       const monthCount = Number(activeRun.monthCount || 0);
       const assetCount = Number(activeRun.assetCount || 0);
