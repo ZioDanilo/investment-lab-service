@@ -568,6 +568,7 @@ class MarketUniverseServiceClass {
 
     try {
       await MarketUniverseMonth.destroy({ where: { runId: previousRun.runId } });
+      await MarketUniverseBinaryChunk.destroy({ where: { runId: previousRun.runId } });
       await this.withRetry('destroy-run', () => previousRun.destroy());
       return { destroyed: true, outcome: 'deleted' };
     } catch (error) {
