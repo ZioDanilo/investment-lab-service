@@ -438,6 +438,8 @@ class MarketUniverseServiceClass {
         throw error;
       }
 
+      await persistBinaryCache(cache, this.withRetry.bind(this));
+
       this.activeUniverseCache = cache;
       this.activeUniverseStats.dbLoads = Number(this.activeUniverseStats.dbLoads || 0) + 1;
       this.activeUniverseStats.lastLoadMs = Number(cache.loadMs || 0);
