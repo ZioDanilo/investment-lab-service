@@ -344,53 +344,67 @@ class MarketUniverseServiceClass {
 
     const loadPromise = (async () => {
       const startedAt = Date.now();
-      const rows = await MarketUniverseMonth.findAll({
-        where: { runId: activeRun.runId },
-        attributes: ['runId', 'pathId', 'monthIndex', 'scenario', 'intensity', 'returnsVector'],
-        raw: true,
-        order: [['pathId', 'ASC'], ['monthIndex', 'ASC']]
-      });
+      const pathCount = Number(activeRun.pathCount || 0);
+      const monthCount = Number(activeRun.monthCount || 0);
+      const assetCount = Number(activeRun.assetCount || 0);
+      const assetOrder = Array.isArray(activeRun.assetOrder) ? activeRun.assetOrder.map((isin) => String(isin || '').trim().toUpperCase()) : [];
+      const expectedRows = pathCount * monthCount;
+      const returnStorage = new Float64Array(pathCount * monthCount * assetCount);
+      const scenarioStorage = new Array(pathCount * monthCount);
+      const intensityStorage = new Float64Array(pathCount * monthCount);
 
-      if (!Array.isArray(rows) || rows.length === 0) {
+      // Load one path-range at a time instead of materialising all 360k Sequelize
+      // rows at once. This keeps peak memory bounded on smaller production instances
+      // while writing each batch directly into the final compact cache.
+      const pathsPerBatch = Math.max(1, Number(process.env.MARKET_UNIVERSE_CACHE_PATH_BATCH_SIZE || 50));
+      let loadedRows = 0;
+
+      for (let pathStart = 0; pathStart < pathCount; pathStart += pathsPerBatch) {
+        const pathEnd = Math.min(pathCount, pathStart + pathsPerBatch);
+        const rows = await MarketUniverseMonth.findAll({
+          where: {
+            runId: activeRun.runId,
+            pathId: { [Op.gte]: pathStart, [Op.lt]: pathEnd }
+          },
+          attributes: ['pathId', 'monthIndex', 'scenario', 'intensity', 'returnsVector'],
+          raw: true,
+          order: [['pathId', 'ASC'], ['monthIndex', 'ASC']]
+        });
+
+        loadedRows += rows.length;
+
+        for (const row of rows) {
+          const pathId = Number(row.pathId || 0);
+          const monthIndex = Number(row.monthIndex || 0);
+          const vector = Array.isArray(row.returnsVector) ? row.returnsVector : [];
+          if (vector.length !== assetCount) {
+            const error = new Error(`Persisted Market Universe vector for path ${pathId}, month ${monthIndex} is shorter than asset_order metadata`);
+            error.code = 'INVALID_ACTIVE_MARKET_UNIVERSE_VECTOR';
+            error.statusCode = 409;
+            throw error;
+          }
+
+          const linearIndex = (pathId * monthCount + monthIndex) * assetCount;
+          for (let assetIndex = 0; assetIndex < assetCount; assetIndex += 1) {
+            returnStorage[linearIndex + assetIndex] = Number(vector[assetIndex] || 0);
+          }
+          scenarioStorage[pathId * monthCount + monthIndex] = row.scenario || '';
+          intensityStorage[pathId * monthCount + monthIndex] = Number(row.intensity || 0);
+        }
+      }
+
+      if (loadedRows === 0) {
         const error = new Error('Active Market Universe contains no persisted month rows');
         error.code = 'EMPTY_ACTIVE_MARKET_UNIVERSE';
         error.statusCode = 409;
         throw error;
       }
 
-      const pathCount = Number(activeRun.pathCount || 0);
-      const monthCount = Number(activeRun.monthCount || 0);
-      const assetCount = Number(activeRun.assetCount || 0);
-      const assetOrder = Array.isArray(activeRun.assetOrder) ? activeRun.assetOrder.map((isin) => String(isin || '').trim().toUpperCase()) : [];
-      const expectedRows = pathCount * monthCount;
-      if (expectedRows > 0 && rows.length !== expectedRows) {
-        const error = new Error(`Persisted Market Universe geometry mismatch: expected ${expectedRows} rows but found ${rows.length}`);
+      if (expectedRows > 0 && loadedRows !== expectedRows) {
+        const error = new Error(`Persisted Market Universe geometry mismatch: expected ${expectedRows} rows but found ${loadedRows}`);
         error.code = 'INVALID_ACTIVE_MARKET_UNIVERSE_GEOMETRY';
         error.statusCode = 409;
         throw error;
-      }
-
-      const returnStorage = new Float64Array(pathCount * monthCount * assetCount);
-      const scenarioStorage = new Array(pathCount * monthCount);
-      const intensityStorage = new Float64Array(pathCount * monthCount);
-
-      for (const row of rows) {
-        const pathId = Number(row.pathId || 0);
-        const monthIndex = Number(row.monthIndex || 0);
-        const vector = Array.isArray(row.returnsVector) ? row.returnsVector : [];
-        if (vector.length !== assetCount) {
-          const error = new Error(`Persisted Market Universe vector for path ${pathId}, month ${monthIndex} is shorter than asset_order metadata`);
-          error.code = 'INVALID_ACTIVE_MARKET_UNIVERSE_VECTOR';
-          error.statusCode = 409;
-          throw error;
-        }
-
-        const linearIndex = (pathId * monthCount + monthIndex) * assetCount;
-        for (let assetIndex = 0; assetIndex < assetCount; assetIndex += 1) {
-          returnStorage[linearIndex + assetIndex] = Number(vector[assetIndex] || 0);
-        }
-        scenarioStorage[pathId * monthCount + monthIndex] = row.scenario || '';
-        intensityStorage[pathId * monthCount + monthIndex] = Number(row.intensity || 0);
       }
 
       const cache = {
