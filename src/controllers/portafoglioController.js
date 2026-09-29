@@ -304,3 +304,104 @@ exports.deletePortafoglio = async (req, res, next) => {
     next(error);
   }
 };
+
+
+const ALLOWED_KPI_IDS = new Set([
+  'expectedReturn',
+  'volatility',
+  'positiveReturnProbability',
+  'recoveryPeriod',
+  'averageMaxDrawdown'
+]);
+
+// Get persisted Monte Carlo KPI priority/targets for one portfolio.
+exports.getKpiTargets = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const portfolio = await Portafoglio.findByPk(id, { attributes: ['id'] });
+    if (!portfolio) {
+      return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
+    }
+
+    const [rows] = await sequelize.query(
+      `SELECT portfolio_id AS "portfolioId", kpi, priority, target
+         FROM portfolio_kpi_target
+        WHERE portfolio_id = :portfolioId
+        ORDER BY priority ASC`,
+      { replacements: { portfolioId: id } }
+    );
+
+    res.status(200).json({ success: true, data: rows });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Atomically replace the five persisted KPI rows for one portfolio.
+exports.saveKpiTargets = async (req, res, next) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const kpis = Array.isArray(req.body?.kpis) ? req.body.kpis : [];
+
+    const portfolio = await Portafoglio.findByPk(id, { attributes: ['id'], transaction });
+    if (!portfolio) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
+    }
+
+    const normalized = kpis.map((item) => ({
+      kpi: String(item?.kpi ?? ''),
+      priority: Number(item?.priority),
+      target: item?.target == null ? null : String(item.target)
+    }));
+
+    const ids = normalized.map((item) => item.kpi);
+    const priorities = normalized.map((item) => item.priority);
+    const valid =
+      normalized.length === ALLOWED_KPI_IDS.size &&
+      normalized.every((item) => ALLOWED_KPI_IDS.has(item.kpi) && Number.isInteger(item.priority) && item.priority >= 1 && item.priority <= 5) &&
+      new Set(ids).size === ALLOWED_KPI_IDS.size &&
+      new Set(priorities).size === ALLOWED_KPI_IDS.size;
+
+    if (!valid) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        error: 'Configurazione KPI non valida: servono i 5 KPI previsti con priorità univoche da 1 a 5'
+      });
+    }
+
+    await sequelize.query(
+      'DELETE FROM portfolio_kpi_target WHERE portfolio_id = :portfolioId',
+      { replacements: { portfolioId: id }, transaction }
+    );
+
+    for (const item of normalized) {
+      await sequelize.query(
+        `INSERT INTO portfolio_kpi_target (portfolio_id, kpi, priority, target)
+         VALUES (:portfolioId, :kpi, :priority, :target)`,
+        {
+          replacements: {
+            portfolioId: id,
+            kpi: item.kpi,
+            priority: item.priority,
+            target: item.target
+          },
+          transaction
+        }
+      );
+    }
+
+    await transaction.commit();
+    res.status(200).json({
+      success: true,
+      data: normalized.map((item) => ({ portfolioId: id, ...item }))
+    });
+  } catch (error) {
+    if (!transaction.finished) {
+      await transaction.rollback();
+    }
+    next(error);
+  }
+};
