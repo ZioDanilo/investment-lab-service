@@ -1,0 +1,122 @@
+{
+  "activeRunId": "ab68e1f9-27c1-4aa7-9f9f-6d82b515a201",
+  "sizes": {
+    "currentJSON": {
+      "rawBytes": 48096728,
+      "rawMiB": 45.868614196777344
+    },
+    "compactJSON": {
+      "rawBytes": 19308719,
+      "rawMiB": 18.41422939300537
+    },
+    "binaryFull": {
+      "rawBytes": 6120056,
+      "rawMiB": 5.836540222167969
+    },
+    "binaryReturnsOnly": {
+      "rawBytes": 2880056,
+      "rawMiB": 2.7466354370117188
+    }
+  },
+  "compression": {
+    "currentJSON": {
+      "gzipBytes": 10621153,
+      "gzipMiB": 10.129120826721191,
+      "brotliBytes": 7758443,
+      "brotliMiB": 7.3990278244018555
+    },
+    "compactJSON": {
+      "gzipBytes": 6587354,
+      "gzipMiB": 6.282190322875977,
+      "brotliBytes": 5859155,
+      "brotliMiB": 5.587725639343262
+    },
+    "binaryFull": {
+      "gzipBytes": 5530370,
+      "gzipMiB": 5.274171829223633,
+      "brotliBytes": 5386354,
+      "brotliMiB": 5.13682746887207
+    },
+    "binaryReturnsOnly": {
+      "gzipBytes": 2756772,
+      "gzipMiB": 2.6290626525878906,
+      "brotliBytes": 2711289,
+      "brotliMiB": 2.585686683654785
+    }
+  },
+  "encodeDecode": {
+    "currentJSON": {
+      "encode": {
+        "min": 1241.2254000008106,
+        "mean": 1464.2646800041198,
+        "median": 1396.1838000118732,
+        "p90": 1733.5410999953747,
+        "max": 1733.5410999953747
+      },
+      "decode": {
+        "min": 1015.6777000129223,
+        "mean": 1332.3379999995232,
+        "median": 1152.162299990654,
+        "p90": 1852.678099989891,
+        "max": 1852.678099989891
+      }
+    },
+    "compactJSON": {
+      "encode": {
+        "min": 1225.5537000000477,
+        "mean": 1437.3992600023746,
+        "median": 1378.366899996996,
+        "p90": 1746.8768000006676,
+        "max": 1746.8768000006676
+      },
+      "decode": {
+        "min": 498.8569999933243,
+        "mean": 525.0984199881553,
+        "median": 517.9111999869347,
+        "p90": 584.7832999825478,
+        "max": 584.7832999825478
+      }
+    },
+    "binaryFull": {
+      "encode": {
+        "min": 144.3474000096321,
+        "mean": 155.41761999726296,
+        "median": 150.88040000200272,
+        "p90": 179.8555999994278,
+        "max": 179.8555999994278
+      },
+      "decode": {
+        "min": 2.7598000168800354,
+        "mean": 3.5260599970817568,
+        "median": 3.233599990606308,
+        "p90": 4.6180999875068665,
+        "max": 4.6180999875068665
+      }
+    },
+    "binaryReturnsOnly": {
+      "encode": {
+        "min": 63.379899978637695,
+        "mean": 138.59037999510764,
+        "median": 136.4346999824047,
+        "p90": 200.16730001568794,
+        "max": 200.16730001568794
+      },
+      "decode": {
+        "min": 2.5485000014305115,
+        "mean": 14.486039990186692,
+        "median": 11.52759999036789,
+        "p90": 39.405799984931946,
+        "max": 39.405799984931946
+      }
+    }
+  },
+  "httpCompressionEnabled": false,
+  "exactness": {
+    "returnsExact": true,
+    "intensitiesExact": true,
+    "scenariosExact": true,
+    "runIdExact": true,
+    "pathIdentityExact": true,
+    "monthIdentityExact": true
+  }
+}

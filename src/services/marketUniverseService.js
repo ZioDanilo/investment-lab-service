@@ -7,6 +7,7 @@ const EtfCorrelation = require('../models/EtfCorrelation');
 const MarketUniverseRun = require('../models/MarketUniverseRun');
 const MarketUniverseMonth = require('../models/MarketUniverseMonth');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
+const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL, PAYLOAD_TYPE_RETURNS_ONLY } = require('../utils/marketUniverseBinaryTransport');
 
 const optionalModel = (modulePath) => {
   try {
@@ -162,6 +163,274 @@ const loadSharedMonteCarloCore = async () => {
 };
 
 class MarketUniverseServiceClass {
+  static activeUniverseCache = {
+    runId: null,
+    pathCount: 0,
+    monthCount: 0,
+    assetCount: 0,
+    assetOrder: [],
+    returns: null,
+    scenarios: null,
+    intensities: null,
+    loadedAt: null,
+    loadMs: 0,
+    state: 'COLD'
+  };
+
+  static activeUniverseLoadPromise = null;
+
+  static activeUniverseStats = {
+    cacheHits: 0,
+    cacheMisses: 0,
+    dbLoads: 0,
+    lastLoadMs: 0
+  };
+
+  static buildApproxCacheMemoryBytes(cache) {
+    const standardHeader = 128;
+    const scenarioBytes = cache?.scenarios ? cache.scenarios.length * 24 : 0;
+    const intensityBytes = cache?.intensities ? cache.intensities.byteLength : 0;
+    const returnsBytes = cache?.returns ? cache.returns.byteLength : 0;
+    return standardHeader + returnsBytes + intensityBytes + scenarioBytes;
+  }
+
+  static invalidateActiveUniverseCache(runId = null) {
+    const currentRunId = this.activeUniverseCache && this.activeUniverseCache.runId ? String(this.activeUniverseCache.runId) : null;
+    if (runId && currentRunId && currentRunId !== String(runId)) {
+      return this.activeUniverseCache;
+    }
+
+    this.activeUniverseCache = {
+      runId: null,
+      pathCount: 0,
+      monthCount: 0,
+      assetCount: 0,
+      assetOrder: [],
+      returns: null,
+      scenarios: null,
+      intensities: null,
+      loadedAt: null,
+      loadMs: 0,
+      state: 'COLD'
+    };
+    this.activeUniverseLoadPromise = null;
+    return this.activeUniverseCache;
+  }
+
+  static async getActiveUniverseCacheStatus() {
+    const activeRun = await this.getActiveMarketUniverseRun();
+    const cache = this.activeUniverseCache;
+    const state = cache.runId === activeRun.runId && cache.state === 'WARM' ? 'WARM' : (this.activeUniverseLoadPromise ? 'LOADING' : 'COLD');
+    return {
+      state,
+      runId: cache.runId || activeRun.runId,
+      loadedAt: cache.loadedAt || null,
+      loadMs: Number(cache.loadMs || 0),
+      pathCount: Number(cache.pathCount || activeRun.pathCount || 0),
+      monthCount: Number(cache.monthCount || activeRun.monthCount || 0),
+      assetCount: Number(cache.assetCount || activeRun.assetCount || 0),
+      memoryBytes: this.buildApproxCacheMemoryBytes(cache),
+      cacheHits: Number(this.activeUniverseStats.cacheHits || 0),
+      cacheMisses: Number(this.activeUniverseStats.cacheMisses || 0),
+      dbLoads: Number(this.activeUniverseStats.dbLoads || 0)
+    };
+  }
+
+  static async warmupActiveUniverseCache() {
+    const cache = await this.getActiveUniverseCache();
+    return {
+      runId: cache.runId,
+      status: cache.state,
+      loadMs: Number(cache.loadMs || 0),
+      memoryBytes: this.buildApproxCacheMemoryBytes(cache),
+      pathCount: Number(cache.pathCount || 0),
+      monthCount: Number(cache.monthCount || 0),
+      assetCount: Number(cache.assetCount || 0)
+    };
+  }
+
+  static async promoteActiveUniverseCacheAfterActivation(previousRunId = null, nextRunId = null) {
+    const targetRunId = nextRunId ? String(nextRunId) : null;
+    const previousRunIdValue = previousRunId ? String(previousRunId) : null;
+
+    try {
+      const activeRun = await this.getActiveMarketUniverseRun();
+      const activeRunId = activeRun && activeRun.runId ? String(activeRun.runId) : null;
+
+      if (!activeRunId) {
+        return { warm: false, runId: null, state: 'COLD', active: false, reason: 'no-active-run' };
+      }
+
+      if (targetRunId && activeRunId !== targetRunId) {
+        return {
+          warm: false,
+          runId: activeRunId,
+          state: this.activeUniverseCache && this.activeUniverseCache.runId === activeRunId && this.activeUniverseCache.state === 'WARM' ? 'WARM' : 'COLD',
+          active: true,
+          reason: previousRunIdValue && activeRunId === previousRunIdValue ? 'activation-rollback' : 'activation-mismatch'
+        };
+      }
+
+      if (this.activeUniverseCache && this.activeUniverseCache.runId === activeRunId && this.activeUniverseCache.state === 'WARM') {
+        return {
+          warm: true,
+          runId: activeRunId,
+          state: 'WARM',
+          active: true,
+          loadMs: Number(this.activeUniverseCache.loadMs || 0)
+        };
+      }
+
+      this.invalidateActiveUniverseCache();
+
+      const cache = await this.getActiveUniverseCache();
+      const warm = Boolean(cache && cache.runId === activeRunId && cache.state === 'WARM');
+
+      if (cache && cache.runId === activeRunId) {
+        this.activeUniverseCache = {
+          ...this.activeUniverseCache,
+          ...(cache || {}),
+          runId: activeRunId,
+          state: warm ? 'WARM' : (cache && cache.state ? cache.state : 'COLD')
+        };
+      }
+
+      return {
+        warm,
+        runId: activeRunId,
+        state: warm ? 'WARM' : (cache && cache.state ? cache.state : 'COLD'),
+        active: true,
+        loadMs: Number(cache?.loadMs || 0)
+      };
+    } catch (error) {
+      const activeRun = await this.getActiveMarketUniverseRun().catch(() => null);
+      const activeRunId = activeRun && activeRun.runId ? String(activeRun.runId) : (targetRunId || null);
+
+      if (this.activeUniverseCache && this.activeUniverseCache.runId === activeRunId && this.activeUniverseCache.state === 'WARM') {
+        return {
+          warm: true,
+          runId: activeRunId,
+          state: 'WARM',
+          active: true,
+          loadMs: Number(this.activeUniverseCache.loadMs || 0)
+        };
+      }
+
+      return {
+        warm: false,
+        runId: activeRunId,
+        state: 'COLD',
+        active: Boolean(activeRunId),
+        error: error?.message || 'Market Universe cache warm-up failed after activation',
+        code: error?.code || 'MARKET_UNIVERSE_CACHE_WARMUP_FAILED'
+      };
+    }
+  }
+
+  static async getActiveUniverseCache() {
+    const activeRun = await this.getActiveMarketUniverseRun();
+    const currentCache = this.activeUniverseCache;
+
+    if (currentCache && currentCache.runId === activeRun.runId && currentCache.state === 'WARM' && currentCache.returns && currentCache.assetOrder.length === Number(activeRun.assetCount || 0)) {
+      this.activeUniverseStats.cacheHits = Number(this.activeUniverseStats.cacheHits || 0) + 1;
+      return currentCache;
+    }
+
+    if (this.activeUniverseLoadPromise) {
+      return this.activeUniverseLoadPromise;
+    }
+
+    this.activeUniverseStats.cacheMisses = Number(this.activeUniverseStats.cacheMisses || 0) + 1;
+
+    const loadPromise = (async () => {
+      const startedAt = Date.now();
+      const rows = await MarketUniverseMonth.findAll({
+        where: { runId: activeRun.runId },
+        attributes: ['runId', 'pathId', 'monthIndex', 'scenario', 'intensity', 'returnsVector'],
+        raw: true,
+        order: [['pathId', 'ASC'], ['monthIndex', 'ASC']]
+      });
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        const error = new Error('Active Market Universe contains no persisted month rows');
+        error.code = 'EMPTY_ACTIVE_MARKET_UNIVERSE';
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const pathCount = Number(activeRun.pathCount || 0);
+      const monthCount = Number(activeRun.monthCount || 0);
+      const assetCount = Number(activeRun.assetCount || 0);
+      const assetOrder = Array.isArray(activeRun.assetOrder) ? activeRun.assetOrder.map((isin) => String(isin || '').trim().toUpperCase()) : [];
+      const expectedRows = pathCount * monthCount;
+      if (expectedRows > 0 && rows.length !== expectedRows) {
+        const error = new Error(`Persisted Market Universe geometry mismatch: expected ${expectedRows} rows but found ${rows.length}`);
+        error.code = 'INVALID_ACTIVE_MARKET_UNIVERSE_GEOMETRY';
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const returnStorage = new Float64Array(pathCount * monthCount * assetCount);
+      const scenarioStorage = new Array(pathCount * monthCount);
+      const intensityStorage = new Float64Array(pathCount * monthCount);
+
+      for (const row of rows) {
+        const pathId = Number(row.pathId || 0);
+        const monthIndex = Number(row.monthIndex || 0);
+        const vector = Array.isArray(row.returnsVector) ? row.returnsVector : [];
+        if (vector.length !== assetCount) {
+          const error = new Error(`Persisted Market Universe vector for path ${pathId}, month ${monthIndex} is shorter than asset_order metadata`);
+          error.code = 'INVALID_ACTIVE_MARKET_UNIVERSE_VECTOR';
+          error.statusCode = 409;
+          throw error;
+        }
+
+        const linearIndex = (pathId * monthCount + monthIndex) * assetCount;
+        for (let assetIndex = 0; assetIndex < assetCount; assetIndex += 1) {
+          returnStorage[linearIndex + assetIndex] = Number(vector[assetIndex] || 0);
+        }
+        scenarioStorage[pathId * monthCount + monthIndex] = row.scenario || '';
+        intensityStorage[pathId * monthCount + monthIndex] = Number(row.intensity || 0);
+      }
+
+      const cache = {
+        runId: activeRun.runId,
+        pathCount,
+        monthCount,
+        assetCount,
+        assetOrder,
+        returns: returnStorage,
+        scenarios: scenarioStorage,
+        intensities: intensityStorage,
+        loadedAt: new Date().toISOString(),
+        loadMs: Date.now() - startedAt,
+        state: 'WARM'
+      };
+
+      if (cache.runId !== activeRun.runId) {
+        const error = new Error('Active Market Universe cache runId validation failed');
+        error.code = 'INVALID_ACTIVE_MARKET_UNIVERSE_CACHE';
+        error.statusCode = 409;
+        throw error;
+      }
+
+      this.activeUniverseCache = cache;
+      this.activeUniverseStats.dbLoads = Number(this.activeUniverseStats.dbLoads || 0) + 1;
+      this.activeUniverseStats.lastLoadMs = Number(cache.loadMs || 0);
+      return cache;
+    })();
+
+    this.activeUniverseLoadPromise = loadPromise;
+
+    try {
+      return await loadPromise;
+    } finally {
+      if (this.activeUniverseLoadPromise === loadPromise) {
+        this.activeUniverseLoadPromise = null;
+      }
+    }
+  }
+
   static async withRetry(operationName, operation, options = {}) {
     const maxAttempts = Number(options.maxAttempts || 4);
     const baseDelayMs = Number(options.baseDelayMs || 150);
@@ -479,6 +748,8 @@ class MarketUniverseServiceClass {
       dryRun = false
     } = options;
 
+    this.invalidateActiveUniverseCache();
+
     try {
       const rawEtfs = await ETF.findAll({ raw: true });
       const duplicateIsins = rawEtfs
@@ -619,6 +890,11 @@ class MarketUniverseServiceClass {
         await applyRunPatch(run, { status: 'ACTIVE', active: true });
       }
 
+      const cachePromotion = await this.promoteActiveUniverseCacheAfterActivation(
+        previousRun && previousRun.runId ? previousRun.runId : null,
+        run && run.runId ? run.runId : null
+      );
+
       const runPayload = run && typeof run.toJSON === 'function' ? run.toJSON() : (run || {});
 
       if (dryRun) {
@@ -626,14 +902,30 @@ class MarketUniverseServiceClass {
           success: true,
           dryRun: true,
           run: { ...runPayload, status: 'ACTIVE', active: true },
-          rowCount
+          rowCount,
+          cache: {
+            warm: Boolean(cachePromotion?.warm),
+            runId: cachePromotion?.runId || run?.runId || null,
+            state: cachePromotion?.state || 'COLD',
+            loadMs: Number(cachePromotion?.loadMs || 0),
+            error: cachePromotion?.error || null,
+            code: cachePromotion?.code || null
+          }
         };
       }
 
       return {
         success: true,
         run: { ...runPayload, status: 'ACTIVE', active: true },
-        rowCount
+        rowCount,
+        cache: {
+          warm: Boolean(cachePromotion?.warm),
+          runId: cachePromotion?.runId || run?.runId || null,
+          state: cachePromotion?.state || 'COLD',
+          loadMs: Number(cachePromotion?.loadMs || 0),
+          error: cachePromotion?.error || null,
+          code: cachePromotion?.code || null
+        }
       };
     } catch (error) {
       const normalizedError = new Error(error?.message || 'Market Universe regeneration failed');
@@ -752,50 +1044,42 @@ class MarketUniverseServiceClass {
       throw error;
     }
 
-    const where = { runId: activeRun.runId };
-    if (Number.isInteger(limitPaths) && limitPaths > 0) {
-      where.pathId = { [Op.lt]: Number(limitPaths) };
-    }
-    if (Number.isInteger(maxMonths) && maxMonths > 0) {
-      where.monthIndex = { [Op.lt]: Number(maxMonths) };
-    }
-
-    const monthRows = await MarketUniverseMonth.findAll({
-      where,
-      attributes: ['pathId', 'monthIndex', 'scenario', 'intensity', 'returnsVector'],
-      raw: true,
-      order: [['pathId', 'ASC'], ['monthIndex', 'ASC']]
-    });
-
-    if (!Array.isArray(monthRows) || monthRows.length === 0) {
-      const error = new Error('Active Market Universe contains no persisted month rows');
-      error.code = 'EMPTY_ACTIVE_MARKET_UNIVERSE';
-      error.statusCode = 409;
-      throw error;
-    }
-
+    const cache = await this.getActiveUniverseCache();
+    const pathLimit = Number.isInteger(limitPaths) && limitPaths > 0 ? Number(limitPaths) : Number(activeRun.pathCount || 0);
+    const monthLimit = Number.isInteger(maxMonths) && maxMonths > 0 ? Number(maxMonths) : Number(activeRun.monthCount || 0);
+    const pathCount = Math.min(Number(cache.pathCount || activeRun.pathCount || 0), pathLimit);
+    const monthCount = Math.min(Number(cache.monthCount || activeRun.monthCount || 0), monthLimit);
     const groupedByPath = new Map();
-    for (const row of monthRows) {
-      if (!groupedByPath.has(row.pathId)) {
-        groupedByPath.set(row.pathId, []);
+
+    for (let pathId = 0; pathId < pathCount; pathId += 1) {
+      const monthlyEntries = [];
+      const baseOffset = (pathId * Number(cache.monthCount || activeRun.monthCount || 0)) * Number(cache.assetCount || activeRun.assetCount || 0);
+
+      for (let monthIndex = 0; monthIndex < monthCount; monthIndex += 1) {
+        const offset = baseOffset + (monthIndex * Number(cache.assetCount || activeRun.assetCount || 0));
+        const scenario = cache.scenarios?.[pathId * Number(cache.monthCount || activeRun.monthCount || 0) + monthIndex] || null;
+        const intensity = Number(cache.intensities?.[pathId * Number(cache.monthCount || activeRun.monthCount || 0) + monthIndex] ?? 0);
+        let weightedReturn = 0;
+
+        for (const holding of normalizedHoldings) {
+          const assetIndex = assetIndexByIsin.get(holding.isin);
+          if (assetIndex === undefined) {
+            throw new Error(`Persisted Market Universe vector for path ${pathId}, month ${monthIndex} is shorter than asset_order metadata`);
+          }
+          const returnValue = Number(cache.returns?.[offset + assetIndex] ?? 0);
+          weightedReturn += holding.weight * returnValue;
+        }
+
+        monthlyEntries.push({
+          pathId,
+          monthIndex,
+          scenario,
+          intensity,
+          weightedReturn
+        });
       }
 
-      const returnsVector = Array.isArray(row.returnsVector) ? row.returnsVector : [];
-      const weightedReturn = normalizedHoldings.reduce((sum, holding) => {
-        const index = assetIndexByIsin.get(holding.isin);
-        if (index === undefined || index >= returnsVector.length) {
-          throw new Error(`Persisted Market Universe vector for path ${row.pathId}, month ${row.monthIndex} is shorter than asset_order metadata`);
-        }
-        return sum + (holding.weight * Number(returnsVector[index] || 0));
-      }, 0);
-
-      groupedByPath.get(row.pathId).push({
-        pathId: row.pathId,
-        monthIndex: row.monthIndex,
-        scenario: row.scenario,
-        intensity: Number(row.intensity),
-        weightedReturn
-      });
+      groupedByPath.set(pathId, monthlyEntries);
     }
 
     const paths = [...groupedByPath.entries()]
@@ -803,10 +1087,8 @@ class MarketUniverseServiceClass {
       .map(([pathId, entries]) => ({
         pathId: Number(pathId),
         monthlyReturns: entries
-          .sort((left, right) => Number(left.monthIndex) - Number(right.monthIndex))
           .map((entry) => Number(entry.weightedReturn)),
         months: entries
-          .sort((left, right) => Number(left.monthIndex) - Number(right.monthIndex))
           .map((entry) => ({
             monthIndex: Number(entry.monthIndex),
             scenario: entry.scenario,
@@ -830,7 +1112,81 @@ class MarketUniverseServiceClass {
       weights: normalizedHoldings,
       pathCount: paths.length,
       monthCount: paths[0]?.monthlyReturns.length || 0,
-      paths
+      paths,
+      cache: {
+        state: cache.state,
+        runId: cache.runId,
+        loadMs: Number(cache.loadMs || 0),
+        hit: cache.runId === activeRun.runId && cache.state === 'WARM'
+      }
+    };
+  }
+
+  static async buildBinaryPortfolioProjection(options = {}) {
+    const {
+      holdings = [],
+      limitPaths = null,
+      maxMonths = null,
+      requestedRunId = null,
+      previousRunId = null,
+      knownRunId = null,
+      payloadType = 'FULL'
+    } = options;
+
+    const resolvedRequestedRunId = knownRunId ?? requestedRunId ?? null;
+
+    const projection = await this.buildPortfolioProjectionFromActiveMarketUniverse({
+      holdings,
+      limitPaths,
+      maxMonths
+    });
+
+    const activeRunId = String(projection?.run?.runId || '');
+    const nextPayloadType = String(payloadType || 'FULL').toUpperCase() === 'RETURNS_ONLY' || (resolvedRequestedRunId && previousRunId && String(previousRunId) === String(resolvedRequestedRunId) && String(resolvedRequestedRunId) === activeRunId)
+      ? 'RETURNS_ONLY'
+      : 'FULL';
+
+    const flatReturns = [];
+    const flatIntensities = [];
+    const flatScenarios = [];
+
+    for (const path of Array.isArray(projection?.paths) ? projection.paths : []) {
+      for (const month of Array.isArray(path?.months) ? path.months : []) {
+        flatReturns.push(Number(month?.weightedReturn ?? 0));
+        flatIntensities.push(Number(month?.intensity ?? 0));
+        flatScenarios.push(month?.scenario ?? 'expansion');
+      }
+    }
+
+    const binary = encodeMarketUniverseBinary({
+      runId: activeRunId,
+      pathCount: Number(projection?.pathCount || 0),
+      monthCount: Number(projection?.monthCount || 0),
+      payloadType: nextPayloadType,
+      returns: flatReturns,
+      intensities: nextPayloadType === 'FULL' ? flatIntensities : [],
+      scenarios: nextPayloadType === 'FULL' ? flatScenarios : []
+    });
+
+    return {
+      success: true,
+      version: 1,
+      payloadType: nextPayloadType,
+      runId: activeRunId,
+      pathCount: Number(projection?.pathCount || 0),
+      monthCount: Number(projection?.monthCount || 0),
+      returns: flatReturns,
+      intensities: nextPayloadType === 'FULL' ? flatIntensities : null,
+      scenarios: nextPayloadType === 'FULL' ? flatScenarios : null,
+      geometry: {
+        pathCount: Number(projection?.pathCount || 0),
+        monthCount: Number(projection?.monthCount || 0),
+        totalValues: flatReturns.length,
+        requestedRunId: resolvedRequestedRunId ? String(resolvedRequestedRunId) : null,
+        previousRunId: previousRunId ? String(previousRunId) : null
+      },
+      buffer: binary,
+      rawBuffer: binary
     };
   }
 

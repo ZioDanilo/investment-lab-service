@@ -12,6 +12,7 @@ const MarketUniverseRun = require('./models/MarketUniverseRun');
 const MarketUniverseMonth = require('./models/MarketUniverseMonth');
 const { sequelize, initializeAssociations } = require('./config/database');
 const { MarketUniverseService } = require('./services/marketUniverseService');
+const { encodeMarketUniverseBinary, decodeMarketUniverseBinary } = require('./utils/marketUniverseBinaryTransport');
 
 describe('Market Universe Service', () => {
   const fixtureEtfs = [
@@ -551,6 +552,89 @@ describe('Market Universe Service', () => {
     expect(updateSpy.mock.calls[1][0]).toMatchObject({ status: 'ACTIVE', active: true });
   });
 
+  test('promotes the new active run into the Node cache immediately after a successful activation commit', async () => {
+    MarketUniverseService.activeUniverseCache = {
+      runId: 'old-run',
+      pathCount: 2,
+      monthCount: 3,
+      assetCount: 1,
+      assetOrder: ['A'],
+      returns: new Float64Array([1, 2, 3, 4, 5, 6]),
+      scenarios: ['expansion', 'expansion', 'expansion', 'expansion', 'expansion', 'expansion'],
+      intensities: new Float64Array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0]),
+      loadedAt: new Date().toISOString(),
+      loadMs: 10,
+      state: 'WARM'
+    };
+    MarketUniverseService.activeUniverseLoadPromise = null;
+
+    jest.spyOn(MarketUniverseService, 'getActiveMarketUniverseRun').mockResolvedValue({
+      runId: 'new-run',
+      status: 'ACTIVE',
+      active: true,
+      pathCount: 2,
+      monthCount: 3,
+      assetCount: 1,
+      assetOrder: ['A']
+    });
+    const warmCache = {
+      runId: 'new-run',
+      pathCount: 2,
+      monthCount: 3,
+      assetCount: 1,
+      assetOrder: ['A'],
+      returns: new Float64Array([10, 11, 12, 13, 14, 15]),
+      scenarios: ['recession', 'recession', 'recession', 'recession', 'recession', 'recession'],
+      intensities: new Float64Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
+      loadedAt: new Date().toISOString(),
+      loadMs: 12,
+      state: 'WARM'
+    };
+    jest.spyOn(MarketUniverseService, 'getActiveUniverseCache').mockResolvedValue(warmCache);
+
+    const result = await MarketUniverseService.promoteActiveUniverseCacheAfterActivation('old-run', 'new-run');
+
+    expect(result.warm).toBe(true);
+    expect(result.runId).toBe('new-run');
+    expect(MarketUniverseService.activeUniverseCache.runId).toBe('new-run');
+    expect(MarketUniverseService.activeUniverseCache.state).toBe('WARM');
+  });
+
+  test('does not invalidate or reload cache when the active switch rolls back to the old run', async () => {
+    MarketUniverseService.activeUniverseCache = {
+      runId: 'old-run',
+      pathCount: 2,
+      monthCount: 3,
+      assetCount: 1,
+      assetOrder: ['A'],
+      returns: new Float64Array([1, 2, 3, 4, 5, 6]),
+      scenarios: ['expansion', 'expansion', 'expansion', 'expansion', 'expansion', 'expansion'],
+      intensities: new Float64Array([0.5, 0.6, 0.7, 0.8, 0.9, 1.0]),
+      loadedAt: new Date().toISOString(),
+      loadMs: 10,
+      state: 'WARM'
+    };
+    MarketUniverseService.activeUniverseLoadPromise = null;
+
+    jest.spyOn(MarketUniverseService, 'getActiveMarketUniverseRun').mockResolvedValue({
+      runId: 'old-run',
+      status: 'ACTIVE',
+      active: true,
+      pathCount: 2,
+      monthCount: 3,
+      assetCount: 1,
+      assetOrder: ['A']
+    });
+    const getActiveUniverseCacheSpy = jest.spyOn(MarketUniverseService, 'getActiveUniverseCache');
+
+    const result = await MarketUniverseService.promoteActiveUniverseCacheAfterActivation('old-run', 'new-run');
+
+    expect(result.warm).toBe(false);
+    expect(result.runId).toBe('old-run');
+    expect(MarketUniverseService.activeUniverseCache.runId).toBe('old-run');
+    expect(getActiveUniverseCacheSpy).not.toHaveBeenCalled();
+  });
+
   test('reconcileActiveUniverseState distinguishes committed and rolled-back switch outcomes', async () => {
     jest.spyOn(MarketUniverseRun, 'findAll').mockResolvedValueOnce([{ runId: 'old-run', status: 'ACTIVE', active: true }]).mockResolvedValueOnce([{ runId: 'new-run', status: 'ACTIVE', active: true }]);
 
@@ -630,5 +714,90 @@ describe('Market Universe Service', () => {
     expect(projection.paths[0].monthlyReturns[1]).toBeCloseTo(0.016, 12);
     expect(projection.paths[1].monthlyReturns[0]).toBeCloseTo(0.006, 12);
     expect(projection.paths[1].monthlyReturns[1]).toBeCloseTo(0.014, 12);
+  });
+
+  test('buildBinaryPortfolioProjection switches between FULL and RETURNS_ONLY payloads for the same active run', async () => {
+    const activeRun = {
+      runId: 'run-binary-transport',
+      generatedAt: new Date(),
+      seed: 7,
+      pathCount: 2,
+      monthCount: 2,
+      assetCount: 2,
+      assetOrder: ['IE00BL25JP72', 'IE00BL25JP73'],
+      status: 'ACTIVE',
+      active: true,
+      toJSON: () => ({
+        runId: 'run-binary-transport',
+        generatedAt: new Date().toISOString(),
+        seed: 7,
+        pathCount: 2,
+        monthCount: 2,
+        assetCount: 2,
+        assetOrder: ['IE00BL25JP72', 'IE00BL25JP73'],
+        status: 'ACTIVE',
+        active: true
+      })
+    };
+
+    const monthRows = [
+      { pathId: 0, monthIndex: 0, scenario: 'expansion', intensity: 0.2, returnsVector: [0.01, -0.02] },
+      { pathId: 0, monthIndex: 1, scenario: 'soft_landing', intensity: 0.3, returnsVector: [0.02, 0.01] },
+      { pathId: 1, monthIndex: 0, scenario: 'recession', intensity: 0.6, returnsVector: [-0.01, 0.03] },
+      { pathId: 1, monthIndex: 1, scenario: 'stagflation', intensity: 0.7, returnsVector: [0.03, -0.01] }
+    ];
+
+    jest.spyOn(MarketUniverseRun, 'findAll').mockResolvedValue([activeRun]);
+    jest.spyOn(MarketUniverseMonth, 'count').mockResolvedValue(4);
+    jest.spyOn(MarketUniverseMonth, 'findAll').mockResolvedValue(monthRows);
+
+    const fullPayload = await MarketUniverseService.buildBinaryPortfolioProjection({
+      holdings: [
+        { isin: 'IE00BL25JP72', weight: 0.6 },
+        { isin: 'IE00BL25JP73', weight: 0.4 }
+      ],
+      requestedRunId: null
+    });
+
+    expect(fullPayload.payloadType).toBe('FULL');
+    expect(fullPayload.runId).toBe('run-binary-transport');
+    expect(fullPayload.returns).toHaveLength(4);
+    expect(fullPayload.scenarios).toHaveLength(4);
+
+    const returnsOnlyPayload = await MarketUniverseService.buildBinaryPortfolioProjection({
+      holdings: [
+        { isin: 'IE00BL25JP72', weight: 0.6 },
+        { isin: 'IE00BL25JP73', weight: 0.4 }
+      ],
+      requestedRunId: 'run-binary-transport',
+      previousRunId: 'run-binary-transport',
+      payloadType: 'RETURNS_ONLY'
+    });
+
+    expect(returnsOnlyPayload.payloadType).toBe('RETURNS_ONLY');
+    expect(returnsOnlyPayload.runId).toBe('run-binary-transport');
+    expect(returnsOnlyPayload.scenarios).toBeNull();
+    expect(returnsOnlyPayload.returns).toHaveLength(4);
+  });
+
+  test('decodes binary payloads with UUID-style run IDs without unaligned Float64Array reads', () => {
+    const runId = 'ab68e1f9-27c1-4aa7-9f9f-6d82b515a201';
+    const returns = [0.01, -0.02, 0.03, -0.04, 0.05, -0.06];
+    const payload = encodeMarketUniverseBinary({
+      runId,
+      pathCount: 2,
+      monthCount: 3,
+      payloadType: 'RETURNS_ONLY',
+      returns
+    });
+
+    const decoded = decodeMarketUniverseBinary(payload);
+
+    expect(decoded.runId).toBe(runId);
+    expect(decoded.payloadType).toBe('RETURNS_ONLY');
+    expect(decoded.pathCount).toBe(2);
+    expect(decoded.monthCount).toBe(3);
+    expect(decoded.returnCount).toBe(6);
+    expect(Array.from(decoded.returns)).toEqual(returns);
   });
 });
