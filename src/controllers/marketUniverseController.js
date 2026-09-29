@@ -93,11 +93,61 @@ const buildPortfolioProjectionFromActiveMarketUniverse = async (req, res, next) 
   }
 };
 
+const buildBinaryPortfolioProjectionFromActiveMarketUniverse = async (req, res, next) => {
+  try {
+    const payload = await MarketUniverseService.buildBinaryPortfolioProjection(req.body || {});
+    res.setHeader('X-Market-Universe-Run-Id', String(payload.runId || ''));
+    res.setHeader('X-Market-Universe-Version', String(payload.version || 1));
+    res.setHeader('X-Market-Universe-Payload-Type', String(payload.payloadType || 'FULL'));
+    res.setHeader('X-Market-Universe-Path-Count', String(payload.pathCount || 0));
+    res.setHeader('X-Market-Universe-Month-Count', String(payload.monthCount || 0));
+    return res.status(200).type('application/octet-stream').send(payload.buffer);
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      code: error?.code || 'ACTIVE_MARKET_UNIVERSE_BINARY_PROJECTION_FAILED',
+      error: error?.message || 'Binary portfolio projection from active Market Universe failed'
+    });
+  }
+};
+
+const getActiveMarketUniverseCacheStatus = async (req, res, next) => {
+  try {
+    const status = await MarketUniverseService.getActiveUniverseCacheStatus();
+    return res.status(200).json({ success: true, data: status });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      code: error?.code || 'ACTIVE_MARKET_UNIVERSE_CACHE_STATUS_FAILED',
+      error: error?.message || 'Active Market Universe cache status request failed'
+    });
+  }
+};
+
+const warmupActiveMarketUniverseCache = async (req, res, next) => {
+  try {
+    const status = await MarketUniverseService.warmupActiveUniverseCache();
+    return res.status(200).json({ success: true, data: status });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      code: error?.code || 'ACTIVE_MARKET_UNIVERSE_CACHE_WARMUP_FAILED',
+      error: error?.message || 'Active Market Universe cache warm-up failed'
+    });
+  }
+};
+
 module.exports = {
   getAllAssets,
   getAssetById,
   getAssetByIsin,
   regenerateMarketUniverse,
   getActiveMarketUniverse,
-  buildPortfolioProjectionFromActiveMarketUniverse
+  buildPortfolioProjectionFromActiveMarketUniverse,
+  buildBinaryPortfolioProjectionFromActiveMarketUniverse,
+  getActiveMarketUniverseCacheStatus,
+  warmupActiveMarketUniverseCache
 };

@@ -1,0 +1,59 @@
+﻿const { performance } = require('perf_hooks');
+const zlib = require('zlib');
+
+async function fetchJson(url, options={}) {
+  const res = await fetch(url, options);
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+  return res.json();
+}
+
+function median(arr){ const s=[...arr].sort((a,b)=>a-b); const m=Math.floor(s.length/2); return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+function stats(arr){ const s=[...arr].sort((a,b)=>a-b); return {min: s[0], mean: arr.reduce((a,b)=>a+b,0)/arr.length, median: median(arr), p90: s[Math.min(s.length-1, Math.ceil(.9*s.length)-1)], max: s[s.length-1]}; }
+function compactCandidate(projection){ const flatScenarios=[]; const flatIntensities=[]; const paths=(Array.isArray(projection?.paths)?projection.paths:[]).map((path)=>{ const monthlyReturns=Array.isArray(path?.monthlyReturns)?path.monthlyReturns.map(Number):[]; for (const month of Array.isArray(path?.months)?path.months:[]) { flatScenarios.push(month?.scenario ?? 'expansion'); flatIntensities.push(Number(month?.intensity ?? 0)); } return { pathId: Number(path?.pathId ?? 0), monthlyReturns };}); return { runId: String(projection?.run?.runId ?? ''), pathCount: Number(projection?.pathCount ?? paths.length), monthCount: Number(projection?.monthCount ?? (paths[0]?.monthlyReturns?.length ?? 0)), paths, scenarios: flatScenarios, intensities: flatIntensities }; }
+function binaryFull(projection){ const pathCount=Number(projection?.pathCount ?? 0); const monthCount=Number(projection?.monthCount ?? 0); const total=pathCount*monthCount; const returns=new Float64Array(total); const intensities=new Float64Array(total); const scenarios=new Uint8Array(total); const map={expansion:0,soft_landing:1,recession:2,stagflation:3}; let flatIndex=0; for (const path of Array.isArray(projection?.paths)?projection.paths:[]) { for (let monthIndex=0; monthIndex<monthCount; monthIndex+=1){ const month=path?.months?.[monthIndex] ?? {}; returns[flatIndex]=Number(path?.monthlyReturns?.[monthIndex] ?? month?.weightedReturn ?? 0); intensities[flatIndex]=Number(month?.intensity ?? 0); scenarios[flatIndex]=map[month?.scenario ?? 'expansion'] ?? 0; flatIndex+=1; } } const runId=Buffer.from(String(projection?.run?.runId ?? ''), 'utf8'); const header=4+4+4+4+4+runId.length; const buffer=Buffer.allocUnsafe(header + returns.byteLength + intensities.byteLength + scenarios.byteLength); let offset=0; buffer.writeUInt32LE(1, offset); offset+=4; buffer.writeUInt32LE(pathCount, offset); offset+=4; buffer.writeUInt32LE(monthCount, offset); offset+=4; buffer.writeUInt32LE(runId.length, offset); offset+=4; buffer.writeUInt32LE(total, offset); offset+=4; runId.copy(buffer, offset); offset+=runId.length; Buffer.from(returns.buffer, returns.byteOffset, returns.byteLength).copy(buffer, offset); offset += returns.byteLength; Buffer.from(intensities.buffer, intensities.byteOffset, intensities.byteLength).copy(buffer, offset); offset += intensities.byteLength; Buffer.from(scenarios.buffer, scenarios.byteOffset, scenarios.byteLength).copy(buffer, offset); return buffer; }
+function binaryReturnsOnly(projection){ const pathCount=Number(projection?.pathCount ?? 0); const monthCount=Number(projection?.monthCount ?? 0); const total=pathCount*monthCount; const returns=new Float64Array(total); let flatIndex=0; for (const path of Array.isArray(projection?.paths)?projection.paths:[]) { for (let monthIndex=0; monthIndex<monthCount; monthIndex+=1){ returns[flatIndex]=Number(path?.monthlyReturns?.[monthIndex] ?? 0); flatIndex+=1; } } const runId=Buffer.from(String(projection?.run?.runId ?? ''), 'utf8'); const header=4+4+4+4+4+runId.length; const buffer=Buffer.allocUnsafe(header + returns.byteLength); let offset=0; buffer.writeUInt32LE(1, offset); offset+=4; buffer.writeUInt32LE(pathCount, offset); offset+=4; buffer.writeUInt32LE(monthCount, offset); offset+=4; buffer.writeUInt32LE(runId.length, offset); offset+=4; buffer.writeUInt32LE(total, offset); offset+=4; runId.copy(buffer, offset); offset += runId.length; Buffer.from(returns.buffer, returns.byteOffset, returns.byteLength).copy(buffer, offset); return buffer; }
+(async () => {
+  const portfolioJson = await fetchJson('http://localhost:3000/api/portfolio');
+  const portfolios = Array.isArray(portfolioJson?.data) ? portfolioJson.data : [];
+  const sonia = portfolios.find((entry) => String(entry?.nome || '').trim() === 'Sonia');
+  if (!sonia) throw new Error('Sonia not found');
+  const rawHoldings = (Array.isArray(sonia.etfs) ? sonia.etfs : []).map((entry)=>({isin: entry?.etf?.isin, weight:Number(entry?.peso ?? entry?.weight ?? 0)})).filter((e)=>e.isin && Number.isFinite(e.weight) && e.weight > 0);
+  const total = rawHoldings.reduce((sum, item)=>sum + item.weight, 0);
+  const holdings = rawHoldings.map((item)=>({isin:item.isin, weight:item.weight/total}));
+  const result = await fetchJson('http://localhost:3000/api/market-universe/portfolio/projection', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({holdings})});
+  const projection = result?.data ?? result;
+  const currentJson = JSON.stringify(projection);
+  const compactJson = JSON.stringify(compactCandidate(projection));
+  const payloads = {
+    currentJSON: Buffer.from(currentJson, 'utf8'),
+    compactJSON: Buffer.from(compactJson, 'utf8'),
+    binaryFull: Buffer.from(binaryFull(projection)),
+    binaryReturnsOnly: Buffer.from(binaryReturnsOnly(projection))
+  };
+
+  const makeEncodeStats = (label, fn) => {
+    const samples=[]; for(let i=0;i<3;i++){ const t0=performance.now(); fn(); samples.push(performance.now()-t0); }
+    return { ...stats(samples), label };
+  };
+  const res = {
+    activeRunId: projection.run?.runId,
+    sizes: Object.fromEntries(Object.entries(payloads).map(([k, v]) => [k, {rawBytes: v.length, rawMiB: v.length / (1024*1024)}])),
+    compression: Object.fromEntries(Object.entries(payloads).map(([k, v]) => {
+      const gz = zlib.gzipSync(v); const br = zlib.brotliCompressSync(v);
+      return [k, { gzipBytes: gz.length, gzipMiB: gz.length/(1024*1024), brotliBytes: br.length, brotliMiB: br.length/(1024*1024)}];
+    })),
+    encode: {
+      currentJSON: makeEncodeStats('currentJSON', () => JSON.stringify(projection)),
+      compactJSON: makeEncodeStats('compactJSON', () => JSON.stringify(compactCandidate(projection))),
+      binaryFull: makeEncodeStats('binaryFull', () => binaryFull(projection)),
+      binaryReturnsOnly: makeEncodeStats('binaryReturnsOnly', () => binaryReturnsOnly(projection))
+    },
+    decode: {
+      currentJSON: (() => { const samples=[]; for(let i=0;i<3;i++){ const t0=performance.now(); JSON.parse(currentJson); samples.push(performance.now()-t0); } return stats(samples); })(),
+      compactJSON: (() => { const samples=[]; for(let i=0;i<3;i++){ const t0=performance.now(); JSON.parse(compactJson); samples.push(performance.now()-t0); } return stats(samples); })(),
+      binaryFull: (() => { const samples=[]; for(let i=0;i<3;i++){ const t0=performance.now(); const buffer = Buffer.from(payloads.binaryFull); let offset=0; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; offset += buffer.readUInt32LE(offset-4); samples.push(performance.now()-t0); } return stats(samples); })(),
+      binaryReturnsOnly: (() => { const samples=[]; for(let i=0;i<3;i++){ const t0=performance.now(); const buffer = Buffer.from(payloads.binaryReturnsOnly); let offset=0; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; buffer.readUInt32LE(offset); offset+=4; samples.push(performance.now()-t0); } return stats(samples); })()
+    }
+  };
+  console.log(JSON.stringify(res, null, 2));
+})();
