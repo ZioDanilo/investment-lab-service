@@ -33,6 +33,7 @@ const initializeAssociations = () => {
   const EtfMacroStatistics = require('../models/EtfMacroStatistics');
   const MarketUniverseRun = require('../models/MarketUniverseRun');
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
+  const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
 
   if (!Portafoglio.associations.etfs) {
     Portafoglio.hasMany(PortafoglioEtf, {
@@ -86,6 +87,21 @@ const initializeAssociations = () => {
 
   if (!MarketUniverseMonth.associations.marketUniverseRun) {
     MarketUniverseMonth.belongsTo(MarketUniverseRun, {
+      foreignKey: 'runId',
+      targetKey: 'runId'
+    });
+  }
+
+  if (!MarketUniverseRun.associations.binaryChunks) {
+    MarketUniverseRun.hasMany(MarketUniverseBinaryChunk, {
+      foreignKey: 'runId',
+      as: 'binaryChunks',
+      onDelete: 'CASCADE'
+    });
+  }
+
+  if (!MarketUniverseBinaryChunk.associations.marketUniverseRun) {
+    MarketUniverseBinaryChunk.belongsTo(MarketUniverseRun, {
       foreignKey: 'runId',
       targetKey: 'runId'
     });
