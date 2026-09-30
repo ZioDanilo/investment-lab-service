@@ -70,8 +70,9 @@ exports.searchETF = async (req, res, next) => {
 // Get all portfolios
 exports.getPortafogli = async (req, res, next) => {
   try {
+    const requestedType = req.query.tipo === 'laboratorio' ? 'laboratorio' : req.query.tipo === 'reale' ? 'reale' : null;
     const portafogli = await Portafoglio.findAll({
-      where: { userId: req.user.id },
+      where: { userId: req.user.id, status: 'open', ...(requestedType ? { tipo: requestedType } : {}) },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -187,7 +188,9 @@ exports.savePortafoglio = async (req, res, next) => {
     const portafoglio = await Portafoglio.create({
       nome: normalizedName,
       descrizione: descrizione || null,
-      userId: req.user.id
+      userId: req.user.id,
+      tipo: 'laboratorio',
+      status: 'open'
     });
 
     // Add ETFs
