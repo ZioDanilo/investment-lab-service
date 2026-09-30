@@ -2,7 +2,7 @@ const User = require('../models/User');
 
 module.exports = async (req, res, next) => {
   try {
-    const username = String(req.get('X-Username') ?? '').trim().toLowerCase();
+    const username = String(req.get('X-Username') ?? '').trim();
     if (!username) return res.status(401).json({ success: false, error: 'Utente non autenticato' });
 
     const user = await User.findOne({ where: { username } });
