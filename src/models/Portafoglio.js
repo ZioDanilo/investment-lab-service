@@ -18,6 +18,8 @@ const Portafoglio = sequelize.define('Portafoglio', {
     type: DataTypes.TEXT,
     allowNull: true
   },
+  tipo: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'laboratorio' },
+  status: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'open' },
   dataCreazione: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
