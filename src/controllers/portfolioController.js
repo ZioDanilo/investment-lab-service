@@ -29,7 +29,7 @@ const formatMacroStatistics = (msArray) => {
 exports.getPortfolios = async (req, res, next) => {
   try {
     const portfolios = await Portfolio.findAll({
-      where: { status: 'active' }
+      where: { status: 'active', userId: req.user.id }
     });
     res.status(200).json({
       success: true,
@@ -42,7 +42,7 @@ exports.getPortfolios = async (req, res, next) => {
 
 exports.getPortfolioById = async (req, res, next) => {
   try {
-    const portfolio = await Portfolio.findByPk(req.params.id);
+    const portfolio = await Portfolio.findOne({ where: { id: req.params.id, userId: req.user.id } });
     if (!portfolio) {
       return res.status(404).json({
         error: 'Portfolio not found'
@@ -100,7 +100,8 @@ exports.createPortfolio = async (req, res, next) => {
     const portfolio = await Portfolio.create({
       name,
       description,
-      holdings: holdings || []
+      holdings: holdings || [],
+      userId: req.user.id
     });
 
     res.status(201).json({
@@ -114,7 +115,7 @@ exports.createPortfolio = async (req, res, next) => {
 
 exports.updatePortfolio = async (req, res, next) => {
   try {
-    const portfolio = await Portfolio.findByPk(req.params.id);
+    const portfolio = await Portfolio.findOne({ where: { id: req.params.id, userId: req.user.id } });
 
     if (!portfolio) {
       return res.status(404).json({
@@ -135,7 +136,7 @@ exports.updatePortfolio = async (req, res, next) => {
 
 exports.deletePortfolio = async (req, res, next) => {
   try {
-    const portfolio = await Portfolio.findByPk(req.params.id);
+    const portfolio = await Portfolio.findOne({ where: { id: req.params.id, userId: req.user.id } });
 
     if (!portfolio) {
       return res.status(404).json({
