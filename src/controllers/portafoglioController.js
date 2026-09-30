@@ -194,7 +194,8 @@ exports.savePortafoglio = async (req, res, next) => {
     await PortafoglioEtf.bulkCreate(etfRecords);
 
     // Fetch complete portafoglio
-    const completedPortafoglio = await Portafoglio.findByPk(portafoglio.id, {
+    const completedPortafoglio = await Portafoglio.findOne({
+      where: { id: portafoglio.id, userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -258,7 +259,8 @@ exports.updatePortafoglio = async (req, res, next) => {
     await PortafoglioEtf.bulkCreate(etfRecords);
 
     // Fetch updated portafoglio
-    const updatedPortafoglio = await Portafoglio.findByPk(id, {
+    const updatedPortafoglio = await Portafoglio.findOne({
+      where: { id, userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -285,7 +287,7 @@ exports.deletePortafoglio = async (req, res, next) => {
     const { id } = req.params;
 
     // Find portafoglio
-    const portafoglio = await Portafoglio.findByPk(id);
+    const portafoglio = await Portafoglio.findOne({ where: { id, userId: req.user.id } });
     if (!portafoglio) {
       return res.status(404).json({
         success: false,
