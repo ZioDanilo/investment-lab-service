@@ -18,7 +18,8 @@ exports.createRealPortfolio = async (req, res, next) => {
   try {
     const name = String(req.body?.name ?? '').trim();
     if (!name) return res.status(400).json({ success: false, error: 'Nome portafoglio obbligatorio' });
-    const portfolio = await RealPortfolio.create({ name, description: null, status: 'open' });
+    const description = String(req.body?.description ?? '').trim() || null;
+    const portfolio = await RealPortfolio.create({ name, description, status: 'open' });
     res.status(201).json({ success: true, data: portfolio });
   } catch (error) {
     next(error);
