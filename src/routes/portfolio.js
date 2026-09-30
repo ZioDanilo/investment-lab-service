@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const portfolioController = require('../controllers/portfolioController');
 const portafoglioController = require('../controllers/portafoglioController');
+const currentUser = require('../middleware/currentUser');
+
+router.use(currentUser);
 
 // Old portfolio endpoints
 router.get('/old', portfolioController.getPortfolios);

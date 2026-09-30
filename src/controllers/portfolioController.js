@@ -29,7 +29,7 @@ const formatMacroStatistics = (msArray) => {
 exports.getPortfolios = async (req, res, next) => {
   try {
     const portfolios = await Portfolio.findAll({
-      where: { status: 'active' }
+      where: { status: 'active', userId: req.user.id }
     });
     res.status(200).json({
       success: true,
@@ -42,7 +42,7 @@ exports.getPortfolios = async (req, res, next) => {
 
 exports.getPortfolioById = async (req, res, next) => {
   try {
-    const portfolio = await Portfolio.findByPk(req.params.id);
+    const portfolio = await Portfolio.findOne({ where: { id: req.params.id, userId: req.user.id } });
     if (!portfolio) {
       return res.status(404).json({
         error: 'Portfolio not found'
@@ -96,11 +96,17 @@ exports.getPortfolioById = async (req, res, next) => {
 exports.createPortfolio = async (req, res, next) => {
   try {
     const { name, description, holdings } = req.body;
+    const normalizedName = String(name ?? '').trim();
+    const existingNames = await Portfolio.findAll({ where: { userId: req.user.id }, attributes: ['name'] });
+    if (existingNames.some((item) => String(item.name).trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) {
+      return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
+    }
 
     const portfolio = await Portfolio.create({
-      name,
+      name: normalizedName,
       description,
-      holdings: holdings || []
+      holdings: holdings || [],
+      userId: req.user.id
     });
 
     res.status(201).json({
@@ -114,7 +120,7 @@ exports.createPortfolio = async (req, res, next) => {
 
 exports.updatePortfolio = async (req, res, next) => {
   try {
-    const portfolio = await Portfolio.findByPk(req.params.id);
+    const portfolio = await Portfolio.findOne({ where: { id: req.params.id, userId: req.user.id } });
 
     if (!portfolio) {
       return res.status(404).json({
@@ -135,7 +141,7 @@ exports.updatePortfolio = async (req, res, next) => {
 
 exports.deletePortfolio = async (req, res, next) => {
   try {
-    const portfolio = await Portfolio.findByPk(req.params.id);
+    const portfolio = await Portfolio.findOne({ where: { id: req.params.id, userId: req.user.id } });
 
     if (!portfolio) {
       return res.status(404).json({

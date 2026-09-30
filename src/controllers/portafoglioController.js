@@ -71,6 +71,7 @@ exports.searchETF = async (req, res, next) => {
 exports.getPortafogli = async (req, res, next) => {
   try {
     const portafogli = await Portafoglio.findAll({
+      where: { userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -97,7 +98,8 @@ exports.getPortafoglioById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const portafoglio = await Portafoglio.findByPk(id, {
+    const portafoglio = await Portafoglio.findOne({
+      where: { id, userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -166,6 +168,12 @@ exports.savePortafoglio = async (req, res, next) => {
       });
     }
 
+    const normalizedName = String(nome).trim();
+    const existingNames = await Portafoglio.findAll({ where: { userId: req.user.id }, attributes: ['nome'] });
+    if (existingNames.some((item) => String(item.nome).trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) {
+      return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
+    }
+
     // Validate total weight
     const totalWeight = etfs.reduce((sum, e) => sum + (e.peso || 0), 0);
     if (Math.abs(totalWeight - 100) > 0.01) {
@@ -177,8 +185,9 @@ exports.savePortafoglio = async (req, res, next) => {
 
     // Create portafoglio
     const portafoglio = await Portafoglio.create({
-      nome,
-      descrizione: descrizione || null
+      nome: normalizedName,
+      descrizione: descrizione || null,
+      userId: req.user.id
     });
 
     // Add ETFs
@@ -191,7 +200,8 @@ exports.savePortafoglio = async (req, res, next) => {
     await PortafoglioEtf.bulkCreate(etfRecords);
 
     // Fetch complete portafoglio
-    const completedPortafoglio = await Portafoglio.findByPk(portafoglio.id, {
+    const completedPortafoglio = await Portafoglio.findOne({
+      where: { id: portafoglio.id, userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -219,7 +229,7 @@ exports.updatePortafoglio = async (req, res, next) => {
     const { nome, descrizione, etfs } = req.body;
 
     // Find portafoglio
-    const portafoglio = await Portafoglio.findByPk(id);
+    const portafoglio = await Portafoglio.findOne({ where: { id, userId: req.user.id } });
     if (!portafoglio) {
       return res.status(404).json({
         success: false,
@@ -255,7 +265,8 @@ exports.updatePortafoglio = async (req, res, next) => {
     await PortafoglioEtf.bulkCreate(etfRecords);
 
     // Fetch updated portafoglio
-    const updatedPortafoglio = await Portafoglio.findByPk(id, {
+    const updatedPortafoglio = await Portafoglio.findOne({
+      where: { id, userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -282,7 +293,7 @@ exports.deletePortafoglio = async (req, res, next) => {
     const { id } = req.params;
 
     // Find portafoglio
-    const portafoglio = await Portafoglio.findByPk(id);
+    const portafoglio = await Portafoglio.findOne({ where: { id, userId: req.user.id } });
     if (!portafoglio) {
       return res.status(404).json({
         success: false,
@@ -318,7 +329,7 @@ const ALLOWED_KPI_IDS = new Set([
 exports.getKpiTargets = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const portfolio = await Portafoglio.findByPk(id, { attributes: ['id'] });
+    const portfolio = await Portafoglio.findOne({ where: { id, userId: req.user.id }, attributes: ['id'] });
     if (!portfolio) {
       return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
     }
@@ -344,7 +355,7 @@ exports.saveKpiTargets = async (req, res, next) => {
     const { id } = req.params;
     const kpis = Array.isArray(req.body?.kpis) ? req.body.kpis : [];
 
-    const portfolio = await Portafoglio.findByPk(id, { attributes: ['id'], transaction });
+    const portfolio = await Portafoglio.findOne({ where: { id, userId: req.user.id }, attributes: ['id'], transaction });
     if (!portfolio) {
       await transaction.rollback();
       return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });

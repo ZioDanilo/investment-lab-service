@@ -4,7 +4,7 @@ const { sequelize } = require('../config/database');
 exports.getRealPortfolios = async (req, res, next) => {
   try {
     const portfolios = await RealPortfolio.findAll({
-      where: { status: 'open' },
+      where: { status: 'open', userId: req.user.id },
       attributes: ['id', 'name', 'description', 'status', 'createdAt', 'updatedAt'],
       order: [['createdAt', 'ASC']]
     });
@@ -20,7 +20,11 @@ exports.createRealPortfolio = async (req, res, next) => {
     const name = String(req.body?.name ?? '').trim();
     if (!name) return res.status(400).json({ success: false, error: 'Nome portafoglio obbligatorio' });
     const description = String(req.body?.description ?? '').trim() || null;
-    const portfolio = await RealPortfolio.create({ name, description, status: 'open' });
+    const existingNames = await RealPortfolio.findAll({ where: { userId: req.user.id }, attributes: ['name'] });
+    if (existingNames.some((item) => String(item.name).trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
+    }
+    const portfolio = await RealPortfolio.create({ name, description, status: 'open', userId: req.user.id });
     res.status(201).json({ success: true, data: portfolio });
   } catch (error) {
     next(error);
@@ -32,7 +36,7 @@ exports.deleteRealPortfolio = async (req, res, next) => {
   try {
     const transaction = await sequelize.transaction();
     try {
-      const portfolio = await RealPortfolio.findByPk(req.params.id, { transaction });
+      const portfolio = await RealPortfolio.findOne({ where: { id: req.params.id, userId: req.user.id }, transaction });
       if (!portfolio) {
         await transaction.rollback();
         return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
