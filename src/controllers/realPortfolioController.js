@@ -25,3 +25,15 @@ exports.createRealPortfolio = async (req, res, next) => {
     next(error);
   }
 };
+
+
+exports.deleteRealPortfolio = async (req, res, next) => {
+  try {
+    const portfolio = await RealPortfolio.findByPk(req.params.id);
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
+    await portfolio.destroy();
+    res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
