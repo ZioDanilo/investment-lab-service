@@ -1,5 +1,4 @@
 const RealPortfolio = require('../models/RealPortfolio');
-const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 const { sequelize } = require('../config/database');
 
 exports.getRealPortfolios = async (req, res, next) => {
@@ -38,7 +37,8 @@ exports.deleteRealPortfolio = async (req, res, next) => {
         await transaction.rollback();
         return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
       }
-      await RealPortfolioOperation.destroy({ where: { realPortfolioId: portfolio.id }, transaction });
+      // Child operations are removed by the database FK ON DELETE CASCADE.
+      // Do not query the child table here: deletion must also work before any operation exists.
       await portfolio.destroy({ transaction });
       await transaction.commit();
       res.status(200).json({ success: true });
