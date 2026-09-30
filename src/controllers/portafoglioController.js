@@ -71,6 +71,7 @@ exports.searchETF = async (req, res, next) => {
 exports.getPortafogli = async (req, res, next) => {
   try {
     const portafogli = await Portafoglio.findAll({
+      where: { userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -97,7 +98,8 @@ exports.getPortafoglioById = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const portafoglio = await Portafoglio.findByPk(id, {
+    const portafoglio = await Portafoglio.findOne({
+      where: { id, userId: req.user.id },
       include: [{
         model: PortafoglioEtf,
         as: 'etfs',
@@ -178,7 +180,8 @@ exports.savePortafoglio = async (req, res, next) => {
     // Create portafoglio
     const portafoglio = await Portafoglio.create({
       nome,
-      descrizione: descrizione || null
+      descrizione: descrizione || null,
+      userId: req.user.id
     });
 
     // Add ETFs
@@ -219,7 +222,7 @@ exports.updatePortafoglio = async (req, res, next) => {
     const { nome, descrizione, etfs } = req.body;
 
     // Find portafoglio
-    const portafoglio = await Portafoglio.findByPk(id);
+    const portafoglio = await Portafoglio.findOne({ where: { id, userId: req.user.id } });
     if (!portafoglio) {
       return res.status(404).json({
         success: false,
@@ -318,7 +321,7 @@ const ALLOWED_KPI_IDS = new Set([
 exports.getKpiTargets = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const portfolio = await Portafoglio.findByPk(id, { attributes: ['id'] });
+    const portfolio = await Portafoglio.findOne({ where: { id, userId: req.user.id }, attributes: ['id'] });
     if (!portfolio) {
       return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
     }
@@ -344,7 +347,7 @@ exports.saveKpiTargets = async (req, res, next) => {
     const { id } = req.params;
     const kpis = Array.isArray(req.body?.kpis) ? req.body.kpis : [];
 
-    const portfolio = await Portafoglio.findByPk(id, { attributes: ['id'], transaction });
+    const portfolio = await Portafoglio.findOne({ where: { id, userId: req.user.id }, attributes: ['id'], transaction });
     if (!portfolio) {
       await transaction.rollback();
       return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
