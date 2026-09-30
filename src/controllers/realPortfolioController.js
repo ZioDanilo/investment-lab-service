@@ -1,4 +1,6 @@
 const RealPortfolio = require('../models/RealPortfolio');
+const RealPortfolioOperation = require('../models/RealPortfolioOperation');
+const { sequelize } = require('../config/database');
 
 exports.getRealPortfolios = async (req, res, next) => {
   try {
@@ -29,10 +31,21 @@ exports.createRealPortfolio = async (req, res, next) => {
 
 exports.deleteRealPortfolio = async (req, res, next) => {
   try {
-    const portfolio = await RealPortfolio.findByPk(req.params.id);
-    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
-    await portfolio.destroy();
-    res.status(200).json({ success: true });
+    const transaction = await sequelize.transaction();
+    try {
+      const portfolio = await RealPortfolio.findByPk(req.params.id, { transaction });
+      if (!portfolio) {
+        await transaction.rollback();
+        return res.status(404).json({ success: false, error: 'Portafoglio non trovato' });
+      }
+      await RealPortfolioOperation.destroy({ where: { realPortfolioId: portfolio.id }, transaction });
+      await portfolio.destroy({ transaction });
+      await transaction.commit();
+      res.status(200).json({ success: true });
+    } catch (deleteError) {
+      await transaction.rollback();
+      throw deleteError;
+    }
   } catch (error) {
     next(error);
   }
