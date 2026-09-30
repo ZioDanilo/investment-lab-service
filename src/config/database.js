@@ -27,6 +27,8 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
 });
 
 const initializeAssociations = () => {
+  const User = require('../models/User');
+  const Portfolio = require('../models/Portfolio');
   const ETF = require('../models/ETF');
   const Portafoglio = require('../models/Portafoglio');
   const PortafoglioEtf = require('../models/PortafoglioEtf');
@@ -36,6 +38,11 @@ const initializeAssociations = () => {
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
   const RealPortfolio = require('../models/RealPortfolio');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
+
+  for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli'], [RealPortfolio, 'realPortfolios']]) {
+    if (!User.associations[alias]) User.hasMany(model, { foreignKey: 'userId', as: alias });
+    if (!model.associations.owner) model.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
+  }
 
   if (!RealPortfolio.associations.operations) {
     RealPortfolio.hasMany(RealPortfolioOperation, {
