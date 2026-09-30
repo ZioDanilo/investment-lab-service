@@ -166,6 +166,7 @@ const connectDB = async () => {
         ALTER TABLE real_portfolio_operations
           ADD CONSTRAINT real_portfolio_operations_real_portfolio_id_fkey
           FOREIGN KEY (real_portfolio_id) REFERENCES portafogli(id) ON DELETE CASCADE;
+        DROP TABLE IF EXISTS real_portfolios;
       `);
       console.log('Unified portfolio migration applied');
     } catch (migrationError) {
