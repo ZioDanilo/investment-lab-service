@@ -8,6 +8,7 @@ const Portafoglio = sequelize.define('Portafoglio', {
     primaryKey: true,
     allowNull: false
   },
+  userId: { type: DataTypes.UUID, allowNull: true, field: 'user_id' },
   nome: {
     type: DataTypes.STRING(255),
     allowNull: false,
