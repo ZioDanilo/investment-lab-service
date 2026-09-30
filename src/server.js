@@ -14,6 +14,7 @@ const quotationRoutes = require('./routes/quotation');
 const monteCarloRoutes = require('./routes/montecarlo');
 const marketUniverseRoutes = require('./routes/marketUniverse');
 const realPortfolioRoutes = require('./routes/realPortfolio');
+const authRoutes = require('./routes/auth');
 
 const app = express();
 
@@ -53,7 +54,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Username']
 };
 
 app.use(cors(corsOptions));
@@ -71,6 +72,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/etf', etfRoutes);
 app.use('/api/kpi', kpiRoutes);
