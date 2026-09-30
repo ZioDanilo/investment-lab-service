@@ -18,7 +18,7 @@ exports.getRealPortfolios = async (req, res, next) => {
   try {
     const portfolios = await Portafoglio.findAll({
       where: { status: 'open', tipo: 'reale', userId: req.user.id },
-      order: [['dataCreazione', 'ASC']]
+      order: [['dataCreazione', 'DESC']]
     });
     res.status(200).json({ success: true, data: portfolios.map(toApi) });
   } catch (error) { next(error); }
