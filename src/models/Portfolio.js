@@ -7,10 +7,11 @@ const Portfolio = sequelize.define('Portfolio', {
     defaultValue: DataTypes.UUIDV4,
     primaryKey: true
   },
+  userId: { type: DataTypes.UUID, allowNull: true, field: 'user_id' },
   name: {
     type: DataTypes.STRING,
     allowNull: false,
-    unique: true
+    unique: false
   },
   description: {
     type: DataTypes.TEXT
