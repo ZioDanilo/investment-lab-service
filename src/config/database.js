@@ -35,8 +35,24 @@ const initializeAssociations = () => {
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
   const RealPortfolio = require('../models/RealPortfolio');
+  const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 
-  void RealPortfolio;
+  if (!RealPortfolio.associations.operations) {
+    RealPortfolio.hasMany(RealPortfolioOperation, {
+      foreignKey: 'realPortfolioId',
+      as: 'operations',
+      onDelete: 'CASCADE',
+      hooks: true
+    });
+  }
+
+  if (!RealPortfolioOperation.associations.portfolio) {
+    RealPortfolioOperation.belongsTo(RealPortfolio, {
+      foreignKey: 'realPortfolioId',
+      as: 'portfolio',
+      onDelete: 'CASCADE'
+    });
+  }
 
   if (!Portafoglio.associations.etfs) {
     Portafoglio.hasMany(PortafoglioEtf, {
