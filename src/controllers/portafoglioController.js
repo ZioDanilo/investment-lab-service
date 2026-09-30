@@ -168,6 +168,12 @@ exports.savePortafoglio = async (req, res, next) => {
       });
     }
 
+    const normalizedName = String(nome).trim();
+    const existingNames = await Portafoglio.findAll({ where: { userId: req.user.id }, attributes: ['nome'] });
+    if (existingNames.some((item) => String(item.nome).trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) {
+      return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
+    }
+
     // Validate total weight
     const totalWeight = etfs.reduce((sum, e) => sum + (e.peso || 0), 0);
     if (Math.abs(totalWeight - 100) > 0.01) {
@@ -179,7 +185,7 @@ exports.savePortafoglio = async (req, res, next) => {
 
     // Create portafoglio
     const portafoglio = await Portafoglio.create({
-      nome,
+      nome: normalizedName,
       descrizione: descrizione || null,
       userId: req.user.id
     });
