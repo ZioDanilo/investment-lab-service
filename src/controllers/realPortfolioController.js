@@ -20,6 +20,10 @@ exports.createRealPortfolio = async (req, res, next) => {
     const name = String(req.body?.name ?? '').trim();
     if (!name) return res.status(400).json({ success: false, error: 'Nome portafoglio obbligatorio' });
     const description = String(req.body?.description ?? '').trim() || null;
+    const existingNames = await RealPortfolio.findAll({ where: { userId: req.user.id }, attributes: ['name'] });
+    if (existingNames.some((item) => String(item.name).trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
+    }
     const portfolio = await RealPortfolio.create({ name, description, status: 'open', userId: req.user.id });
     res.status(201).json({ success: true, data: portfolio });
   } catch (error) {
