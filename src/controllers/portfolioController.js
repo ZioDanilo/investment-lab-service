@@ -96,9 +96,14 @@ exports.getPortfolioById = async (req, res, next) => {
 exports.createPortfolio = async (req, res, next) => {
   try {
     const { name, description, holdings } = req.body;
+    const normalizedName = String(name ?? '').trim();
+    const existingNames = await Portfolio.findAll({ where: { userId: req.user.id }, attributes: ['name'] });
+    if (existingNames.some((item) => String(item.name).trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase())) {
+      return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
+    }
 
     const portfolio = await Portfolio.create({
-      name,
+      name: normalizedName,
       description,
       holdings: holdings || [],
       userId: req.user.id
