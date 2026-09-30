@@ -34,6 +34,9 @@ const initializeAssociations = () => {
   const MarketUniverseRun = require('../models/MarketUniverseRun');
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
+  const RealPortfolio = require('../models/RealPortfolio');
+
+  void RealPortfolio;
 
   if (!Portafoglio.associations.etfs) {
     Portafoglio.hasMany(PortafoglioEtf, {
