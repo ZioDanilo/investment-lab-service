@@ -13,6 +13,7 @@ const correlationsRoutes = require('./routes/correlations');
 const quotationRoutes = require('./routes/quotation');
 const monteCarloRoutes = require('./routes/montecarlo');
 const marketUniverseRoutes = require('./routes/marketUniverse');
+const realPortfolioRoutes = require('./routes/realPortfolio');
 
 const app = express();
 
@@ -78,6 +79,7 @@ app.use('/api/correlations', correlationsRoutes);
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/monte-carlo', monteCarloRoutes);
 app.use('/api/market-universe', marketUniverseRoutes);
+app.use('/api/real-portfolios', realPortfolioRoutes);
 
 // 404 Handler
 app.use((req, res) => {
