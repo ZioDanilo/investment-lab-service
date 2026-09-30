@@ -36,16 +36,15 @@ const initializeAssociations = () => {
   const MarketUniverseRun = require('../models/MarketUniverseRun');
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
-  const RealPortfolio = require('../models/RealPortfolio');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 
-  for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli'], [RealPortfolio, 'realPortfolios']]) {
+  for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli']]) {
     if (!User.associations[alias]) User.hasMany(model, { foreignKey: 'userId', as: alias });
     if (!model.associations.owner) model.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
   }
 
-  if (!RealPortfolio.associations.operations) {
-    RealPortfolio.hasMany(RealPortfolioOperation, {
+  if (!Portafoglio.associations.operations) {
+    Portafoglio.hasMany(RealPortfolioOperation, {
       foreignKey: 'realPortfolioId',
       as: 'operations',
       onDelete: 'CASCADE',
@@ -54,7 +53,7 @@ const initializeAssociations = () => {
   }
 
   if (!RealPortfolioOperation.associations.portfolio) {
-    RealPortfolioOperation.belongsTo(RealPortfolio, {
+    RealPortfolioOperation.belongsTo(Portafoglio, {
       foreignKey: 'realPortfolioId',
       as: 'portfolio',
       onDelete: 'CASCADE'
@@ -148,6 +147,30 @@ const connectDB = async () => {
     const ScenarioInertiaConfiguration = require('../models/ScenarioInertiaConfiguration');
     const ScenarioIntensityConfiguration = require('../models/ScenarioIntensityConfiguration');
     const MonteCarloGlobalProperty = require('../models/MonteCarloGlobalProperty');
+
+    // One-time/idempotent unification: real_portfolios -> portafogli.
+    // Preserve UUIDs so existing operations continue to reference the same portfolio.
+    try {
+      await sequelize.query(`
+        ALTER TABLE portafogli ADD COLUMN IF NOT EXISTS tipo VARCHAR(32) NOT NULL DEFAULT 'laboratorio';
+        ALTER TABLE portafogli ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'open';
+        UPDATE portafogli SET tipo = 'laboratorio' WHERE tipo IS NULL OR tipo = '';
+        UPDATE portafogli SET status = 'open' WHERE status IS NULL OR status = '';
+
+        INSERT INTO portafogli (id, user_id, nome, descrizione, tipo, status, "dataCreazione", "dataModifica")
+        SELECT id, user_id, name, description, 'reale', status::text, created_at, updated_at
+          FROM real_portfolios rp
+         WHERE NOT EXISTS (SELECT 1 FROM portafogli p WHERE p.id = rp.id);
+
+        ALTER TABLE real_portfolio_operations DROP CONSTRAINT IF EXISTS real_portfolio_operations_real_portfolio_id_fkey;
+        ALTER TABLE real_portfolio_operations
+          ADD CONSTRAINT real_portfolio_operations_real_portfolio_id_fkey
+          FOREIGN KEY (real_portfolio_id) REFERENCES portafogli(id) ON DELETE CASCADE;
+      `);
+      console.log('Unified portfolio migration applied');
+    } catch (migrationError) {
+      console.warn('Unified portfolio migration warning:', migrationError.message);
+    }
 
     // Sync models with database
     try {
