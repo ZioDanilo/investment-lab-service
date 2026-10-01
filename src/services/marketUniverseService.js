@@ -221,13 +221,22 @@ class MarketUniverseServiceClass {
 
   static async getGenerationStatus() {
     const targetRecords = 360000;
-    const currentRecords = Number(await MarketUniverseMonth.count());
-    const inProgress = currentRecords !== targetRecords;
 
-    if (!inProgress) {
+    // Regeneration is double-buffered: the previous ACTIVE run remains available
+    // while the replacement run is populated. Counting the whole month table would
+    // therefore include both runs and make progress jump/clamp to 100%.
+    const generatingRun = await MarketUniverseRun.findOne({
+      where: { status: 'GENERATING' },
+      order: [['generatedAt', 'DESC']]
+    });
+
+    if (!generatingRun) {
       return { inProgress: false };
     }
 
+    const currentRecords = Number(await MarketUniverseMonth.count({
+      where: { runId: generatingRun.runId }
+    }));
     const missingRecords = Math.max(0, targetRecords - currentRecords);
     const progressPercentage = Math.max(0, Math.min(100, (currentRecords / targetRecords) * 100));
 
