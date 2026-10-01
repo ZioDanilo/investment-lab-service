@@ -6,16 +6,9 @@ const EtfFactorExposure = require('../models/EtfFactorExposure');
 const EtfSpecificRisk = require('../models/EtfSpecificRisk');
 const EtfModelFit = require('../models/EtfModelFit');
 const ETF = require('../models/ETF');
+const { exposureWeightsForHistory } = require('../utils/factorExposureWeights');
 
 const SCENARIOS = ['general','expansion','soft_landing','recession','stagflation'];
-
-const exposureWeightsForHistory = (years) => {
-  const y = Number(years);
-  if (!Number.isFinite(y) || y < 0) return { historicalWeight: 0.2, structuralWeight: 0.8 };
-  if (y < 10) return { historicalWeight: 0.2, structuralWeight: 0.8 };
-  if (y <= 20) return { historicalWeight: 0.6, structuralWeight: 0.4 };
-  return { historicalWeight: 0.8, structuralWeight: 0.2 };
-};
 
 const canonicalPair = (factor1Id, factor2Id) =>
   String(factor1Id).localeCompare(String(factor2Id)) <= 0
