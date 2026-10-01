@@ -37,6 +37,7 @@ const initializeAssociations = () => {
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
+  const RealPortfolioEtf = require('../models/RealPortfolioEtf');
 
   for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli']]) {
     if (!User.associations[alias]) User.hasMany(model, { foreignKey: 'userId', as: alias });
@@ -66,6 +67,19 @@ const initializeAssociations = () => {
   if (!RealPortfolioOperation.associations.user) {
     RealPortfolioOperation.belongsTo(User, { foreignKey: 'userId', as: 'user' });
   }
+  if (!Portafoglio.associations.realEtfs) {
+    Portafoglio.hasMany(RealPortfolioEtf, { foreignKey: 'realPortfolioId', as: 'realEtfs', onDelete: 'CASCADE' });
+  }
+  if (!RealPortfolioEtf.associations.portfolio) {
+    RealPortfolioEtf.belongsTo(Portafoglio, { foreignKey: 'realPortfolioId', as: 'portfolio', onDelete: 'CASCADE' });
+  }
+  if (!ETF.associations.realPortfolioEtfs) {
+    ETF.hasMany(RealPortfolioEtf, { foreignKey: 'etfId', as: 'realPortfolioEtfs' });
+  }
+  if (!RealPortfolioEtf.associations.etf) {
+    RealPortfolioEtf.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  }
+
   if (!ETF.associations.realPortfolioOperations) {
     ETF.hasMany(RealPortfolioOperation, { foreignKey: 'etfId', as: 'realPortfolioOperations' });
   }
