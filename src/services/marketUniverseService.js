@@ -219,6 +219,36 @@ class MarketUniverseServiceClass {
     return this.activeUniverseCache;
   }
 
+  static async getGenerationStatus() {
+    const targetRecords = 360000;
+
+    // The old ACTIVE universe remains in the table while its replacement is
+    // generated. A GENERATING run is therefore the authoritative signal that
+    // regeneration is still in progress, including the initial window where
+    // no new month row has been inserted yet and the table still has 360k rows.
+    const generatingRun = await MarketUniverseRun.findOne({
+      where: { status: 'GENERATING' },
+      order: [['generatedAt', 'DESC']]
+    });
+
+    if (!generatingRun) {
+      return { inProgress: false };
+    }
+
+    const totalRecords = Number(await MarketUniverseMonth.count());
+    const currentRecords = Math.max(0, totalRecords - targetRecords);
+    const missingRecords = Math.max(0, targetRecords - currentRecords);
+    const progressPercentage = Math.max(0, Math.min(100, (currentRecords / targetRecords) * 100));
+
+    return {
+      inProgress: true,
+      currentRecords,
+      missingRecords,
+      targetRecords,
+      progressPercentage
+    };
+  }
+
   static async getActiveUniverseCacheStatus() {
     const activeRun = await this.getActiveMarketUniverseRun();
     const cache = this.activeUniverseCache;
@@ -766,6 +796,35 @@ class MarketUniverseServiceClass {
     }
   }
 
+  static async startMarketUniverseRegeneration(options = {}) {
+    const existingRun = await MarketUniverseRun.findOne({
+      where: { status: 'GENERATING' },
+      order: [['generatedAt', 'DESC']]
+    });
+
+    if (existingRun) {
+      return {
+        accepted: true,
+        alreadyInProgress: true,
+        runId: existingRun.runId
+      };
+    }
+
+    // Start the work on the next event-loop turn so the HTTP request can return
+    // immediately. regenerateMarketUniverse persists GENERATING before producing
+    // month rows; status polling is the source of truth after this acknowledgement.
+    setImmediate(() => {
+      this.regenerateMarketUniverse(options).catch((error) => {
+        console.error('[Market Universe background regeneration]', error);
+      });
+    });
+
+    return {
+      accepted: true,
+      alreadyInProgress: false
+    };
+  }
+
   static async regenerateMarketUniverse(options = {}) {
     const {
       seed = 42,
@@ -777,7 +836,22 @@ class MarketUniverseServiceClass {
 
     this.invalidateActiveUniverseCache();
 
+    let run = null;
+
     try {
+      // Persist the generation state before any expensive preparation. From this
+      // point on generation-status must report inProgress=true even while there
+      // are still zero new month rows.
+      run = await MarketUniverseRun.create({
+        seed,
+        pathCount,
+        monthCount,
+        assetCount: 0,
+        assetOrder: [],
+        status: 'GENERATING',
+        active: false
+      });
+
       const rawEtfs = await ETF.findAll({ raw: true });
       const duplicateIsins = rawEtfs
         .map((etf) => String(etf.isin || '').trim().toUpperCase())
@@ -834,14 +908,9 @@ class MarketUniverseServiceClass {
         order: [['generatedAt', 'DESC']]
       });
 
-      const run = await MarketUniverseRun.create({
-        seed,
-        pathCount,
-        monthCount,
+      await run.update({
         assetCount: orderedIsins.length,
-        assetOrder: orderedIsins,
-        status: 'GENERATING',
-        active: false
+        assetOrder: orderedIsins
       });
       const applyRunPatch = async (target, patch) => {
         if (target && typeof target.update === 'function') {
@@ -955,6 +1024,14 @@ class MarketUniverseServiceClass {
         }
       };
     } catch (error) {
+      if (run && run.status === 'GENERATING') {
+        try {
+          await run.update({ status: 'FAILED', active: false });
+        } catch (statusError) {
+          console.error('[Market Universe failed status update]', statusError);
+        }
+      }
+
       const normalizedError = new Error(error?.message || 'Market Universe regeneration failed');
       normalizedError.code = error?.code || 'MARKET_UNIVERSE_READ_FAILED';
       normalizedError.statusCode = error?.statusCode || 500;
