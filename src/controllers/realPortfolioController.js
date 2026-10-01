@@ -1,6 +1,7 @@
 const Portafoglio = require('../models/Portafoglio');
 const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 const RealPortfolioEtf = require('../models/RealPortfolioEtf');
+const RealPortfolioOrder = require('../models/RealPortfolioOrder');
 const ETF = require('../models/ETF');
 const EtfQuotation = require('../models/EtfQuotation');
 const { sequelize } = require('../config/database');
@@ -25,7 +26,15 @@ exports.getRealPortfolios = async (req, res, next) => {
   try {
     const portfolios = await Portafoglio.findAll({
       where: { status: 'open', tipo: 'reale', userId: req.user.id },
-      order: [['dataCreazione', 'DESC']]
+      include: [{ model: RealPortfolioOrder, as: 'realOrder', required: false, attributes: ['position'] }],
+      order: [['dataCreazione', 'ASC']]
+    });
+    portfolios.sort((a,b) => {
+      const ap=a.realOrder?.position, bp=b.realOrder?.position;
+      if(ap != null && bp != null) return ap-bp;
+      if(ap != null) return -1;
+      if(bp != null) return 1;
+      return new Date(a.dataCreazione).getTime()-new Date(b.dataCreazione).getTime();
     });
     res.status(200).json({ success: true, data: portfolios.map(toApi) });
   } catch (error) { next(error); }
@@ -40,7 +49,9 @@ exports.createRealPortfolio = async (req, res, next) => {
     if (existing.some((item) => String(item.nome).trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
       return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
     }
-    const portfolio = await Portafoglio.create({
+    const portfolioCount = await Portafoglio.count({ where: { userId: req.user.id, tipo: 'reale', status: 'open' } });
+    if (portfolioCount >= 5) return res.status(409).json({ success: false, error: 'Puoi avere al massimo 5 portafogli reali' });
+        const portfolio = await Portafoglio.create({
       nome: name,
       descrizione: description,
       tipo: 'reale',
@@ -310,4 +321,32 @@ exports.getMarketValueSummary = async (req, res, next) => {
     if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
     res.status(200).json({ success: true, data: await buildMarketValueSummary(portfolio) });
   } catch (error) { next(error); }
+};
+
+
+exports.updateRealPortfolioOrder = async (req, res, next) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const ids = Array.isArray(req.body?.portfolioIds) ? req.body.portfolioIds.map(String) : [];
+    if (!ids.length || ids.length > 5 || new Set(ids).size !== ids.length) {
+      await transaction.rollback();
+      return res.status(400).json({ success: false, error: 'Ordine portafogli non valido' });
+    }
+    const portfolios = await Portafoglio.findAll({
+      where: { userId: req.user.id, tipo: 'reale', status: 'open' },
+      attributes: ['id'], transaction
+    });
+    const ownedIds = portfolios.map(p=>String(p.id));
+    if (ids.length !== ownedIds.length || ids.some(id=>!ownedIds.includes(id))) {
+      await transaction.rollback();
+      return res.status(400).json({ success: false, error: 'L’ordine deve contenere tutti i portafogli reali aperti' });
+    }
+    await RealPortfolioOrder.destroy({ where: { userId: req.user.id }, transaction });
+    await RealPortfolioOrder.bulkCreate(ids.map((realPortfolioId, position)=>({ userId:req.user.id, realPortfolioId, position })), { transaction });
+    await transaction.commit();
+    res.status(200).json({ success: true });
+  } catch(error) {
+    if (!transaction.finished) await transaction.rollback();
+    next(error);
+  }
 };
