@@ -2,8 +2,9 @@ const Portafoglio = require('../models/Portafoglio');
 const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 const RealPortfolioEtf = require('../models/RealPortfolioEtf');
 const ETF = require('../models/ETF');
+const EtfQuotation = require('../models/EtfQuotation');
 const { sequelize } = require('../config/database');
-const { QueryTypes } = require('sequelize');
+const { QueryTypes, Op } = require('sequelize');
 
 const toApi = (portfolio) => {
   const p = portfolio.toJSON ? portfolio.toJSON() : portfolio;
@@ -245,5 +246,68 @@ exports.getLatestOperations = async (req, res, next) => {
       total: Number(o.quantity) * Number(o.unitPrice),
       etf: o.etf
     })) });
+  } catch (error) { next(error); }
+};
+
+
+const buildMarketValueSummary = async (portfolio) => {
+  const positions = await RealPortfolioEtf.findAll({
+    where: { realPortfolioId: portfolio.id },
+    include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin'] }]
+  });
+  if (!positions.length) {
+    const contributedCapital = Number(portfolio.contributedCapital ?? 0);
+    const virtualCash = Number(portfolio.virtualCash ?? 0);
+    const totalValue = virtualCash;
+    const gainLoss = totalValue - contributedCapital;
+    return { portfolioId: portfolio.id, marketValue: 0, virtualCash, totalValue, contributedCapital, gainLoss, gainLossPercent: contributedCapital > 0 ? gainLoss / contributedCapital * 100 : 0, quotationDate: null };
+  }
+
+  const isins = positions.map((row) => row.etf?.isin).filter(Boolean);
+  const quotations = await EtfQuotation.findAll({
+    where: { isin: { [Op.in]: isins }, quotation: { [Op.ne]: null } },
+    attributes: ['isin', 'quotation', 'date'],
+    order: [['isin', 'ASC'], ['date', 'DESC']],
+    raw: true
+  });
+  const latestByIsin = new Map();
+  for (const quote of quotations) if (!latestByIsin.has(quote.isin)) latestByIsin.set(quote.isin, quote);
+
+  let marketValue = 0;
+  const usedDates = [];
+  for (const position of positions) {
+    const quote = latestByIsin.get(position.etf?.isin);
+    if (!quote) continue;
+    marketValue += Number(position.quantity) * Number(quote.quotation);
+    usedDates.push(String(quote.date));
+  }
+  const virtualCash = Number(portfolio.virtualCash ?? 0);
+  const contributedCapital = Number(portfolio.contributedCapital ?? 0);
+  const totalValue = marketValue + virtualCash;
+  const gainLoss = totalValue - contributedCapital;
+  return {
+    portfolioId: portfolio.id, marketValue, virtualCash, totalValue, contributedCapital, gainLoss,
+    gainLossPercent: contributedCapital > 0 ? gainLoss / contributedCapital * 100 : 0,
+    quotationDate: usedDates.length === positions.length ? usedDates.sort()[0] : null
+  };
+};
+
+exports.getMarketValueSummaries = async (req, res, next) => {
+  try {
+    const portfolios = await Portafoglio.findAll({
+      where: { status: 'open', tipo: 'reale', userId: req.user.id },
+      order: [['dataCreazione', 'DESC']]
+    });
+    const data = [];
+    for (const portfolio of portfolios) data.push(await buildMarketValueSummary(portfolio));
+    res.status(200).json({ success: true, data });
+  } catch (error) { next(error); }
+};
+
+exports.getMarketValueSummary = async (req, res, next) => {
+  try {
+    const portfolio = await Portafoglio.findOne({ where: { id: req.params.id, status: 'open', tipo: 'reale', userId: req.user.id } });
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+    res.status(200).json({ success: true, data: await buildMarketValueSummary(portfolio) });
   } catch (error) { next(error); }
 };
