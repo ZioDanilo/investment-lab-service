@@ -22,7 +22,7 @@ const EtfModelFit = sequelize.define('EtfModelFit', {
 }, {
   tableName: 'etf_model_fits',
   timestamps: true,
-  indexes: [{ fields: ['etf_id','created_at'] }, { fields: ['status'] }]
+  indexes: [{ fields: ['etfId','createdAt'] }, { fields: ['status'] }]
 });
 
 module.exports = EtfModelFit;
