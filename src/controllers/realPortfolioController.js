@@ -41,25 +41,61 @@ exports.getRealPortfolios = async (req, res, next) => {
 };
 
 exports.createRealPortfolio = async (req, res, next) => {
+  const transaction = await sequelize.transaction();
   try {
     const name = String(req.body?.name ?? '').trim();
-    if (!name) return res.status(400).json({ success: false, error: 'Nome portafoglio obbligatorio' });
+    if (!name) {
+      await transaction.rollback();
+      return res.status(400).json({ success: false, error: 'Nome portafoglio obbligatorio' });
+    }
     const description = String(req.body?.description ?? '').trim() || null;
-    const existing = await Portafoglio.findAll({ where: { userId: req.user.id }, attributes: ['nome'] });
+    const existing = await Portafoglio.findAll({ where: { userId: req.user.id }, attributes: ['nome'], transaction });
     if (existing.some((item) => String(item.nome).trim().toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      await transaction.rollback();
       return res.status(409).json({ success: false, error: 'Nome portafoglio già utilizzato' });
     }
-    const portfolioCount = await Portafoglio.count({ where: { userId: req.user.id, tipo: 'reale', status: 'open' } });
-    if (portfolioCount >= 5) return res.status(409).json({ success: false, error: 'Puoi avere al massimo 5 portafogli reali' });
-        const portfolio = await Portafoglio.create({
+
+    const realPortfolios = await Portafoglio.findAll({
+      where: { userId: req.user.id, tipo: 'reale', status: 'open' },
+      include: [{ model: RealPortfolioOrder, as: 'realOrder', required: false, attributes: ['position'] }],
+      order: [['dataCreazione', 'ASC']],
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (realPortfolios.length >= 5) {
+      await transaction.rollback();
+      return res.status(409).json({ success: false, error: 'Puoi avere al massimo 5 portafogli reali' });
+    }
+
+    realPortfolios.sort((a,b) => {
+      const ap=a.realOrder?.position, bp=b.realOrder?.position;
+      if(ap != null && bp != null) return ap-bp;
+      if(ap != null) return -1;
+      if(bp != null) return 1;
+      return new Date(a.dataCreazione).getTime()-new Date(b.dataCreazione).getTime();
+    });
+
+    const portfolio = await Portafoglio.create({
       nome: name,
       descrizione: description,
       tipo: 'reale',
       status: 'open',
       userId: req.user.id
-    });
+    }, { transaction });
+
+    const completeOrder = [...realPortfolios.map(p => String(p.id)), String(portfolio.id)];
+    await RealPortfolioOrder.destroy({ where: { userId: req.user.id }, transaction });
+    await RealPortfolioOrder.bulkCreate(
+      completeOrder.map((realPortfolioId, position) => ({ userId: req.user.id, realPortfolioId, position })),
+      { transaction }
+    );
+
+    await transaction.commit();
     res.status(201).json({ success: true, data: toApi(portfolio) });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    next(error);
+  }
 };
 
 exports.deleteRealPortfolio = async (req, res, next) => {
