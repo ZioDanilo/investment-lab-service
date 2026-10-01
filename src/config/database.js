@@ -45,6 +45,10 @@ const initializeAssociations = () => {
   const EtfFactorExposure = require('../models/EtfFactorExposure');
   const EtfSpecificRisk = require('../models/EtfSpecificRisk');
   const EtfModelFit = require('../models/EtfModelFit');
+  const InvestmentIndex = require('../models/InvestmentIndex');
+
+  if (!InvestmentIndex.associations.etfs) InvestmentIndex.hasMany(ETF, { foreignKey: 'indexId', as: 'etfs' });
+  if (!ETF.associations.underlyingIndex) ETF.belongsTo(InvestmentIndex, { foreignKey: 'indexId', as: 'underlyingIndex' });
 
   if (!Factor.associations.children) Factor.hasMany(Factor, { foreignKey: 'parentFactorId', as: 'children' });
   if (!Factor.associations.parent) Factor.belongsTo(Factor, { foreignKey: 'parentFactorId', as: 'parent' });
