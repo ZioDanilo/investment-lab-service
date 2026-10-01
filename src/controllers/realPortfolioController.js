@@ -14,7 +14,9 @@ const toApi = (portfolio) => {
     status: p.status,
     tipo: p.tipo,
     createdAt: p.dataCreazione,
-    updatedAt: p.dataModifica
+    updatedAt: p.dataModifica,
+    virtualCash: Number(p.virtualCash ?? 0),
+    contributedCapital: Number(p.contributedCapital ?? 0)
   };
 };
 
@@ -53,7 +55,8 @@ exports.deleteRealPortfolio = async (req, res, next) => {
   try {
     const portfolio = await Portafoglio.findOne({
       where: { id: req.params.id, userId: req.user.id, tipo: 'reale' },
-      transaction
+      transaction,
+      lock: transaction.LOCK.UPDATE
     });
     if (!portfolio) {
       await transaction.rollback();
@@ -130,6 +133,26 @@ exports.createOperation = async (req, res, next) => {
       position = await RealPortfolioEtf.create({ realPortfolioId: portfolio.id, etfId, quantity: nextQuantity }, { transaction });
     }
 
+    const operationValue = quantity * unitPrice;
+    const currentVirtualCash = Number(portfolio.virtualCash ?? 0);
+    const currentContributedCapital = Number(portfolio.contributedCapital ?? 0);
+    let nextVirtualCash = currentVirtualCash;
+    let nextContributedCapital = currentContributedCapital;
+
+    if (operationType === 'sell') {
+      nextVirtualCash = currentVirtualCash + operationValue;
+    } else {
+      const cashUsed = Math.min(currentVirtualCash, operationValue);
+      nextVirtualCash = currentVirtualCash - cashUsed;
+      nextContributedCapital = currentContributedCapital + (operationValue - cashUsed);
+    }
+
+    await portfolio.update({
+      virtualCash: nextVirtualCash,
+      contributedCapital: nextContributedCapital,
+      dataModifica: new Date()
+    }, { transaction });
+
     await transaction.commit();
     res.status(201).json({
       success: true,
@@ -137,7 +160,9 @@ exports.createOperation = async (req, res, next) => {
         id: operation.id, portfolioId: operation.realPortfolioId, operationType: operation.operationType,
         etf: { id: etf.id, isin: etf.isin, ticker: etf.ticker, name: etf.name, nickname: etf.nickname },
         operationDate: operation.operationDate, quantity: operation.quantity, unitPrice: operation.unitPrice,
-        portfolioQuantity: nextQuantity
+        portfolioQuantity: nextQuantity,
+        virtualCash: nextVirtualCash,
+        contributedCapital: nextContributedCapital
       }
     });
   } catch (error) {
