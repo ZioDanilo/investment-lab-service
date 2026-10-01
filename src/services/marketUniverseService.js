@@ -219,6 +219,27 @@ class MarketUniverseServiceClass {
     return this.activeUniverseCache;
   }
 
+  static async getGenerationStatus() {
+    const targetRecords = 360000;
+    const currentRecords = Number(await MarketUniverseMonth.count());
+    const inProgress = currentRecords !== targetRecords;
+
+    if (!inProgress) {
+      return { inProgress: false };
+    }
+
+    const missingRecords = Math.max(0, targetRecords - currentRecords);
+    const progressPercentage = Math.max(0, Math.min(100, (currentRecords / targetRecords) * 100));
+
+    return {
+      inProgress: true,
+      currentRecords,
+      missingRecords,
+      targetRecords,
+      progressPercentage
+    };
+  }
+
   static async getActiveUniverseCacheStatus() {
     const activeRun = await this.getActiveMarketUniverseRun();
     const cache = this.activeUniverseCache;
