@@ -77,7 +77,8 @@ exports.createOperation = async (req, res, next) => {
   try {
     const portfolio = await Portafoglio.findOne({
       where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' },
-      transaction
+      transaction,
+      lock: transaction.LOCK.UPDATE
     });
     if (!portfolio) {
       await transaction.rollback();
