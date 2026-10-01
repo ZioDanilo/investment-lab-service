@@ -221,14 +221,22 @@ class MarketUniverseServiceClass {
 
   static async getGenerationStatus() {
     const targetRecords = 360000;
-    const totalRecords = Number(await MarketUniverseMonth.count());
-    const currentRecords = Math.max(0, totalRecords - targetRecords);
-    const inProgress = totalRecords !== targetRecords;
 
-    if (!inProgress) {
+    // The old ACTIVE universe remains in the table while its replacement is
+    // generated. A GENERATING run is therefore the authoritative signal that
+    // regeneration is still in progress, including the initial window where
+    // no new month row has been inserted yet and the table still has 360k rows.
+    const generatingRun = await MarketUniverseRun.findOne({
+      where: { status: 'GENERATING' },
+      order: [['generatedAt', 'DESC']]
+    });
+
+    if (!generatingRun) {
       return { inProgress: false };
     }
 
+    const totalRecords = Number(await MarketUniverseMonth.count());
+    const currentRecords = Math.max(0, totalRecords - targetRecords);
     const missingRecords = Math.max(0, targetRecords - currentRecords);
     const progressPercentage = Math.max(0, Math.min(100, (currentRecords / targetRecords) * 100));
 
