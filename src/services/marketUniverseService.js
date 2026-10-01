@@ -796,6 +796,35 @@ class MarketUniverseServiceClass {
     }
   }
 
+  static async startMarketUniverseRegeneration(options = {}) {
+    const existingRun = await MarketUniverseRun.findOne({
+      where: { status: 'GENERATING' },
+      order: [['generatedAt', 'DESC']]
+    });
+
+    if (existingRun) {
+      return {
+        accepted: true,
+        alreadyInProgress: true,
+        runId: existingRun.runId
+      };
+    }
+
+    // Start the work on the next event-loop turn so the HTTP request can return
+    // immediately. regenerateMarketUniverse persists GENERATING before producing
+    // month rows; status polling is the source of truth after this acknowledgement.
+    setImmediate(() => {
+      this.regenerateMarketUniverse(options).catch((error) => {
+        console.error('[Market Universe background regeneration]', error);
+      });
+    });
+
+    return {
+      accepted: true,
+      alreadyInProgress: false
+    };
+  }
+
   static async regenerateMarketUniverse(options = {}) {
     const {
       seed = 42,
