@@ -2,6 +2,7 @@ const Portafoglio = require('../models/Portafoglio');
 const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 const ETF = require('../models/ETF');
 const { sequelize } = require('../config/database');
+const { QueryTypes } = require('sequelize');
 
 const toApi = (portfolio) => {
   const p = portfolio.toJSON ? portfolio.toJSON() : portfolio;
@@ -90,6 +91,17 @@ exports.createOperation = async (req, res, next) => {
     const etf = await ETF.findByPk(etfId);
     if (!etf) return res.status(404).json({ success: false, error: 'ETF non trovato' });
 
+    if (operationType === 'sell') {
+      const [position] = await sequelize.query(`
+        SELECT COALESCE(SUM(CASE WHEN operation_type = 'buy' THEN quantity ELSE -quantity END), 0) AS quantity
+        FROM real_portfolio_operations
+        WHERE user_id = :userId AND real_portfolio_id = :portfolioId AND etf_id = :etfId
+      `, { replacements: { userId: req.user.id, portfolioId: portfolio.id, etfId }, type: QueryTypes.SELECT });
+      if (Number(position?.quantity ?? 0) < quantity) {
+        return res.status(400).json({ success: false, error: 'Quantità da vendere superiore alla posizione disponibile' });
+      }
+    }
+
     const operation = await RealPortfolioOperation.create({
       userId: req.user.id,
       realPortfolioId: portfolio.id,
@@ -112,5 +124,28 @@ exports.createOperation = async (req, res, next) => {
         unitPrice: operation.unitPrice
       }
     });
+  } catch (error) { next(error); }
+};
+
+
+exports.getHoldings = async (req, res, next) => {
+  try {
+    const portfolio = await Portafoglio.findOne({
+      where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' }
+    });
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+
+    const holdings = await sequelize.query(`
+      SELECT e.id, e.isin, e.ticker, e.name, e.nickname,
+             SUM(CASE WHEN o.operation_type = 'buy' THEN o.quantity ELSE -o.quantity END) AS quantity
+        FROM real_portfolio_operations o
+        JOIN anagrafica_etf e ON e.id = o.etf_id
+       WHERE o.user_id = :userId AND o.real_portfolio_id = :portfolioId
+       GROUP BY e.id, e.isin, e.ticker, e.name, e.nickname
+      HAVING SUM(CASE WHEN o.operation_type = 'buy' THEN o.quantity ELSE -o.quantity END) > 0
+       ORDER BY COALESCE(e.nickname, e.ticker, e.name), e.isin
+    `, { replacements: { userId: req.user.id, portfolioId: portfolio.id }, type: QueryTypes.SELECT });
+
+    res.status(200).json({ success: true, data: holdings });
   } catch (error) { next(error); }
 };
