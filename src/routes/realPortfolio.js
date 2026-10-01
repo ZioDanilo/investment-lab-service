@@ -7,6 +7,7 @@ router.use(currentUser);
 
 router.get('/', realPortfolioController.getRealPortfolios);
 router.post('/', realPortfolioController.createRealPortfolio);
+router.put('/order', realPortfolioController.updateRealPortfolioOrder);
 router.get('/market-values', realPortfolioController.getMarketValueSummaries);
 router.get('/:id/holdings', realPortfolioController.getHoldings);
 router.get('/:id/market-value', realPortfolioController.getMarketValueSummary);
