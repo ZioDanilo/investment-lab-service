@@ -1,4 +1,6 @@
 const Portafoglio = require('../models/Portafoglio');
+const RealPortfolioOperation = require('../models/RealPortfolioOperation');
+const ETF = require('../models/ETF');
 const { sequelize } = require('../config/database');
 
 const toApi = (portfolio) => {
@@ -62,4 +64,53 @@ exports.deleteRealPortfolio = async (req, res, next) => {
     if (!transaction.finished) await transaction.rollback();
     next(error);
   }
+};
+
+
+exports.createOperation = async (req, res, next) => {
+  try {
+    const portfolio = await Portafoglio.findOne({
+      where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' }
+    });
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+
+    const operationType = String(req.body?.operationType ?? '');
+    const etfId = String(req.body?.etfId ?? '');
+    const operationDate = String(req.body?.operationDate ?? '');
+    const quantity = Number(req.body?.quantity);
+    const unitPrice = Number(req.body?.unitPrice);
+
+    if (!['buy', 'sell'].includes(operationType)) {
+      return res.status(400).json({ success: false, error: 'Tipo operazione non valido' });
+    }
+    if (!etfId || !operationDate || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+      return res.status(400).json({ success: false, error: 'ETF, data, quantità e valore unitario sono obbligatori e devono essere validi' });
+    }
+
+    const etf = await ETF.findByPk(etfId);
+    if (!etf) return res.status(404).json({ success: false, error: 'ETF non trovato' });
+
+    const operation = await RealPortfolioOperation.create({
+      userId: req.user.id,
+      realPortfolioId: portfolio.id,
+      operationType,
+      etfId,
+      operationDate,
+      quantity,
+      unitPrice
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: operation.id,
+        portfolioId: operation.realPortfolioId,
+        operationType: operation.operationType,
+        etf: { id: etf.id, isin: etf.isin, ticker: etf.ticker, name: etf.name, nickname: etf.nickname },
+        operationDate: operation.operationDate,
+        quantity: operation.quantity,
+        unitPrice: operation.unitPrice
+      }
+    });
+  } catch (error) { next(error); }
 };
