@@ -38,11 +38,17 @@ const initializeAssociations = () => {
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
   const RealPortfolioEtf = require('../models/RealPortfolioEtf');
+  const RealPortfolioOrder = require('../models/RealPortfolioOrder');
 
   for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli']]) {
     if (!User.associations[alias]) User.hasMany(model, { foreignKey: 'userId', as: alias });
     if (!model.associations.owner) model.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
   }
+
+  if (!Portafoglio.associations.realOrder) Portafoglio.hasOne(RealPortfolioOrder, { foreignKey: 'realPortfolioId', as: 'realOrder', onDelete: 'CASCADE' });
+  if (!RealPortfolioOrder.associations.portfolio) RealPortfolioOrder.belongsTo(Portafoglio, { foreignKey: 'realPortfolioId', as: 'portfolio', onDelete: 'CASCADE' });
+  if (!User.associations.realPortfolioOrders) User.hasMany(RealPortfolioOrder, { foreignKey: 'userId', as: 'realPortfolioOrders', onDelete: 'CASCADE' });
+  if (!RealPortfolioOrder.associations.user) RealPortfolioOrder.belongsTo(User, { foreignKey: 'userId', as: 'user', onDelete: 'CASCADE' });
 
   if (!Portafoglio.associations.operations) {
     Portafoglio.hasMany(RealPortfolioOperation, {
