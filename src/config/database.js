@@ -60,6 +60,19 @@ const initializeAssociations = () => {
     });
   }
 
+  if (!User.associations.realPortfolioOperations) {
+    User.hasMany(RealPortfolioOperation, { foreignKey: 'userId', as: 'realPortfolioOperations', onDelete: 'CASCADE' });
+  }
+  if (!RealPortfolioOperation.associations.user) {
+    RealPortfolioOperation.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+  }
+  if (!ETF.associations.realPortfolioOperations) {
+    ETF.hasMany(RealPortfolioOperation, { foreignKey: 'etfId', as: 'realPortfolioOperations' });
+  }
+  if (!RealPortfolioOperation.associations.etf) {
+    RealPortfolioOperation.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  }
+
   if (!Portafoglio.associations.etfs) {
     Portafoglio.hasMany(PortafoglioEtf, {
       foreignKey: 'portafoglioId',
