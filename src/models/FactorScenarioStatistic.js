@@ -16,7 +16,7 @@ const FactorScenarioStatistic = sequelize.define('FactorScenarioStatistic', {
 }, {
   tableName: 'factor_scenario_statistics',
   timestamps: true,
-  indexes: [{ unique: true, fields: ['factor_id','macro_scenario'], name: 'factor_scenario_unique' }]
+  indexes: [{ unique: true, fields: ['factorId','macroScenario'], name: 'factor_scenario_unique' }]
 });
 
 module.exports = FactorScenarioStatistic;
