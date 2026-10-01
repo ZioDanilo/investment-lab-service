@@ -233,6 +233,18 @@ const connectDB = async () => {
       console.warn('Unified portfolio migration warning:', migrationError.message);
     }
 
+    // Factor Engine V2 models must be explicitly loaded before sequelize.sync().
+    // Requiring them only inside initializeAssociations is not sufficient because
+    // that function is intentionally idempotent and the V2 schema must always be
+    // registered when the server starts.
+    const Factor = require('../models/Factor');
+    const FactorScenarioStatistic = require('../models/FactorScenarioStatistic');
+    const FactorCorrelation = require('../models/FactorCorrelation');
+    const InvestmentIndex = require('../models/InvestmentIndex');
+    const EtfFactorExposure = require('../models/EtfFactorExposure');
+    const EtfSpecificRisk = require('../models/EtfSpecificRisk');
+    const EtfModelFit = require('../models/EtfModelFit');
+
     // Sync models with database
     try {
       await sequelize.sync({ alter: true });
@@ -249,6 +261,13 @@ const connectDB = async () => {
     void ScenarioInertiaConfiguration;
     void ScenarioIntensityConfiguration;
     void MonteCarloGlobalProperty;
+    void Factor;
+    void FactorScenarioStatistic;
+    void FactorCorrelation;
+    void InvestmentIndex;
+    void EtfFactorExposure;
+    void EtfSpecificRisk;
+    void EtfModelFit;
 
     return sequelize;
   } catch (error) {
