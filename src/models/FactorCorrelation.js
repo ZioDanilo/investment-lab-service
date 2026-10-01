@@ -16,8 +16,8 @@ const FactorCorrelation = sequelize.define('FactorCorrelation', {
   tableName: 'factor_correlations',
   timestamps: true,
   indexes: [
-    { unique: true, fields: ['factor1_id','factor2_id','macro_scenario'], name: 'factor_corr_unique' },
-    { fields: ['macro_scenario'] }
+    { unique: true, fields: ['factor1Id','factor2Id','macroScenario'], name: 'factor_corr_unique' },
+    { fields: ['macroScenario'] }
   ],
   validate: {
     differentFactors() {
