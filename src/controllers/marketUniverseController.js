@@ -35,10 +35,10 @@ const getAssetByIsin = async (req, res, next) => {
 
 const regenerateMarketUniverse = async (req, res, next) => {
   try {
-    const result = await MarketUniverseService.regenerateMarketUniverse();
-    return res.status(200).json({
+    const start = await MarketUniverseService.startMarketUniverseRegeneration();
+    return res.status(202).json({
       success: true,
-      ...result
+      data: start
     });
   } catch (error) {
     const statusCode = Number(error?.statusCode) || 500;
