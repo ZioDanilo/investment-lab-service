@@ -17,7 +17,7 @@ const EtfFactorExposure = sequelize.define('EtfFactorExposure', {
 }, {
   tableName: 'etf_factor_exposures',
   timestamps: true,
-  indexes: [{ unique: true, fields: ['etf_id','factor_id'], name: 'etf_factor_unique' }, { fields: ['factor_id'] }]
+  indexes: [{ unique: true, fields: ['etfId','factorId'], name: 'etf_factor_unique' }, { fields: ['factorId'] }]
 });
 
 module.exports = EtfFactorExposure;
