@@ -836,7 +836,22 @@ class MarketUniverseServiceClass {
 
     this.invalidateActiveUniverseCache();
 
+    let run = null;
+
     try {
+      // Persist the generation state before any expensive preparation. From this
+      // point on generation-status must report inProgress=true even while there
+      // are still zero new month rows.
+      run = await MarketUniverseRun.create({
+        seed,
+        pathCount,
+        monthCount,
+        assetCount: 0,
+        assetOrder: [],
+        status: 'GENERATING',
+        active: false
+      });
+
       const rawEtfs = await ETF.findAll({ raw: true });
       const duplicateIsins = rawEtfs
         .map((etf) => String(etf.isin || '').trim().toUpperCase())
@@ -893,14 +908,9 @@ class MarketUniverseServiceClass {
         order: [['generatedAt', 'DESC']]
       });
 
-      const run = await MarketUniverseRun.create({
-        seed,
-        pathCount,
-        monthCount,
+      await run.update({
         assetCount: orderedIsins.length,
-        assetOrder: orderedIsins,
-        status: 'GENERATING',
-        active: false
+        assetOrder: orderedIsins
       });
       const applyRunPatch = async (target, patch) => {
         if (target && typeof target.update === 'function') {
@@ -1014,6 +1024,14 @@ class MarketUniverseServiceClass {
         }
       };
     } catch (error) {
+      if (run && run.status === 'GENERATING') {
+        try {
+          await run.update({ status: 'FAILED', active: false });
+        } catch (statusError) {
+          console.error('[Market Universe failed status update]', statusError);
+        }
+      }
+
       const normalizedError = new Error(error?.message || 'Market Universe regeneration failed');
       normalizedError.code = error?.code || 'MARKET_UNIVERSE_READ_FAILED';
       normalizedError.statusCode = error?.statusCode || 500;
