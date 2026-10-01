@@ -1,4 +1,4 @@
-const { exposureWeightsForHistory } = require('./services/factorEngineService');
+const { exposureWeightsForHistory } = require('./utils/factorExposureWeights');
 
 describe('Factor Engine V2 exposure weighting', () => {
   test('uses 20/80 below 10 years', () => expect(exposureWeightsForHistory(9.99)).toEqual({ historicalWeight: 0.2, structuralWeight: 0.8 }));
