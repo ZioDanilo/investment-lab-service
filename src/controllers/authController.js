@@ -68,3 +68,24 @@ exports.register = async (req, res, next) => {
     next(error);
   }
 };
+
+exports.checkUsername = async (req, res, next) => {
+  try {
+    const username = String(req.query?.username ?? '').trim();
+    if (!username) {
+      return res.status(200).json({ success: true, data: { available: true } });
+    }
+
+    const existingUser = await User.findOne({
+      where: where(fn('LOWER', col('username')), username.toLowerCase()),
+      attributes: ['id']
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: { available: !existingUser }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
