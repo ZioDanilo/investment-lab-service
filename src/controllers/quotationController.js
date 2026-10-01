@@ -1,5 +1,7 @@
 const ETF = require('../models/ETF');
 const EtfQuotation = require('../models/EtfQuotation');
+const Portafoglio = require('../models/Portafoglio');
+const RealPortfolioEtf = require('../models/RealPortfolioEtf');
 const { sequelize, Op } = require('../config/database');
 const { fetchJustEtfQuotation } = require('../utils/justetfScraper');
 
@@ -402,4 +404,53 @@ exports.refreshSingleQuotation = async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+};
+
+
+// Refresh only ETFs currently held by one real portfolio.
+// Today's stored quotation wins: JustETF is called at most once per ETF/day.
+exports.refreshRealPortfolioQuotations = async (req, res, next) => {
+  try {
+    const today = getTodayDateString();
+    const portfolio = await Portafoglio.findOne({
+      where: { id: req.params.portfolioId, userId: req.user.id, tipo: 'reale', status: 'open' }
+    });
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+
+    const positions = await RealPortfolioEtf.findAll({
+      where: { realPortfolioId: portfolio.id },
+      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'name', 'ticker', 'nickname'] }]
+    });
+    const etfs = positions.map((row) => row.etf).filter(Boolean);
+    if (!etfs.length) return res.status(200).json({ success: true, data: [], date: today });
+
+    const isins = etfs.map((etf) => etf.isin);
+    const todayRows = await EtfQuotation.findAll({
+      where: { date: today, isin: { [Op.in]: isins }, quotation: { [Op.ne]: null } },
+      attributes: ['isin', 'quotation', 'date'],
+      raw: true
+    });
+    const todayMap = new Map(todayRows.map((row) => [row.isin, row]));
+
+    for (const etf of etfs) {
+      if (todayMap.has(etf.isin)) continue;
+      const quotation = await getQuotationFromJustETF(etf.ticker, etf.isin);
+      if (quotation !== null) {
+        await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today }, { conflictFields: ['isin', 'date'] });
+        todayMap.set(etf.isin, { isin: etf.isin, quotation, date: today });
+      }
+    }
+
+    const result = [];
+    for (const etf of etfs) {
+      let row = todayMap.get(etf.isin);
+      if (!row) row = await getLatestStoredQuotation(etf.isin);
+      result.push({
+        isin: etf.isin, name: etf.name, nickname: etf.nickname, ticker: etf.ticker,
+        quotation: row?.quotation != null ? Number(row.quotation) : null,
+        date: row?.date ?? null
+      });
+    }
+    res.status(200).json({ success: true, data: result, date: today });
+  } catch (error) { next(error); }
 };
