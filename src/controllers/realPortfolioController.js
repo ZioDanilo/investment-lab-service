@@ -149,3 +149,22 @@ exports.getHoldings = async (req, res, next) => {
     res.status(200).json({ success: true, data: holdings });
   } catch (error) { next(error); }
 };
+
+
+exports.getOperations = async (req, res, next) => {
+  try {
+    const portfolio = await Portafoglio.findOne({ where: { id: req.params.id, userId: req.user.id, tipo: 'reale' } });
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+    const operations = await RealPortfolioOperation.findAll({
+      where: { userId: req.user.id, realPortfolioId: portfolio.id },
+      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname'] }],
+      order: [['operationDate', 'DESC'], ['createdAt', 'DESC']]
+    });
+    res.status(200).json({ success: true, data: operations.map((o) => ({
+      id: o.id, operationType: o.operationType, operationDate: o.operationDate,
+      quantity: o.quantity, unitPrice: o.unitPrice,
+      total: Number(o.quantity) * Number(o.unitPrice),
+      etf: o.etf
+    })) });
+  } catch (error) { next(error); }
+};
