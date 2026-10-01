@@ -134,18 +134,29 @@ exports.createOperation = async (req, res, next) => {
       position = await RealPortfolioEtf.create({ realPortfolioId: portfolio.id, etfId, quantity: nextQuantity }, { transaction });
     }
 
-    const operationValue = quantity * unitPrice;
-    const currentVirtualCash = Number(portfolio.virtualCash ?? 0);
-    const currentContributedCapital = Number(portfolio.contributedCapital ?? 0);
-    let nextVirtualCash = currentVirtualCash;
-    let nextContributedCapital = currentContributedCapital;
+    // Rebuild derived cash/capital from the complete chronological history.
+    // This keeps the portfolio correct even when historical operations are inserted later.
+    const chronologicalOperations = await RealPortfolioOperation.findAll({
+      where: { userId: req.user.id, realPortfolioId: portfolio.id },
+      attributes: ['operationType', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
+      order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
+      transaction
+    });
 
-    if (operationType === 'sell') {
-      nextVirtualCash = currentVirtualCash + operationValue;
-    } else {
-      const cashUsed = Math.min(currentVirtualCash, operationValue);
-      nextVirtualCash = currentVirtualCash - cashUsed;
-      nextContributedCapital = currentContributedCapital + (operationValue - cashUsed);
+    let nextVirtualCash = 0;
+    let nextContributedCapital = 0;
+
+    for (const historicalOperation of chronologicalOperations) {
+      const historicalValue =
+        Number(historicalOperation.quantity) * Number(historicalOperation.unitPrice);
+
+      if (historicalOperation.operationType === 'sell') {
+        nextVirtualCash += historicalValue;
+      } else {
+        const cashUsed = Math.min(nextVirtualCash, historicalValue);
+        nextVirtualCash -= cashUsed;
+        nextContributedCapital += historicalValue - cashUsed;
+      }
     }
 
     await portfolio.update({
