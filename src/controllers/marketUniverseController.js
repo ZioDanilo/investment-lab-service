@@ -112,6 +112,20 @@ const buildBinaryPortfolioProjectionFromActiveMarketUniverse = async (req, res, 
   }
 };
 
+const getMarketUniverseGenerationStatus = async (req, res, next) => {
+  try {
+    const status = await MarketUniverseService.getGenerationStatus();
+    return res.status(200).json({ success: true, data: status });
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      success: false,
+      code: error?.code || 'MARKET_UNIVERSE_GENERATION_STATUS_FAILED',
+      error: error?.message || 'Market Universe generation status request failed'
+    });
+  }
+};
+
 const getActiveMarketUniverseCacheStatus = async (req, res, next) => {
   try {
     const status = await MarketUniverseService.getActiveUniverseCacheStatus();
@@ -148,6 +162,7 @@ module.exports = {
   getActiveMarketUniverse,
   buildPortfolioProjectionFromActiveMarketUniverse,
   buildBinaryPortfolioProjectionFromActiveMarketUniverse,
+  getMarketUniverseGenerationStatus,
   getActiveMarketUniverseCacheStatus,
   warmupActiveMarketUniverseCache
 };
