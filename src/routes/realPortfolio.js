@@ -7,6 +7,7 @@ router.use(currentUser);
 
 router.get('/', realPortfolioController.getRealPortfolios);
 router.post('/', realPortfolioController.createRealPortfolio);
+router.get('/:id/holdings', realPortfolioController.getHoldings);
 router.post('/:id/operations', realPortfolioController.createOperation);
 router.delete('/:id', realPortfolioController.deleteRealPortfolio);
 
