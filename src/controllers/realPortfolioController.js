@@ -1,5 +1,6 @@
 const Portafoglio = require('../models/Portafoglio');
 const RealPortfolioOperation = require('../models/RealPortfolioOperation');
+const RealPortfolioEtf = require('../models/RealPortfolioEtf');
 const ETF = require('../models/ETF');
 const { sequelize } = require('../config/database');
 const { QueryTypes } = require('sequelize');
@@ -69,11 +70,16 @@ exports.deleteRealPortfolio = async (req, res, next) => {
 
 
 exports.createOperation = async (req, res, next) => {
+  const transaction = await sequelize.transaction();
   try {
     const portfolio = await Portafoglio.findOne({
-      where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' }
+      where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' },
+      transaction
     });
-    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+    if (!portfolio) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+    }
 
     const operationType = String(req.body?.operationType ?? '');
     const etfId = String(req.body?.etfId ?? '');
@@ -82,51 +88,63 @@ exports.createOperation = async (req, res, next) => {
     const unitPrice = Number(req.body?.unitPrice);
 
     if (!['buy', 'sell'].includes(operationType)) {
+      await transaction.rollback();
       return res.status(400).json({ success: false, error: 'Tipo operazione non valido' });
     }
     if (!etfId || !operationDate || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice <= 0) {
+      await transaction.rollback();
       return res.status(400).json({ success: false, error: 'ETF, data, quantità e valore unitario sono obbligatori e devono essere validi' });
     }
 
-    const etf = await ETF.findByPk(etfId);
-    if (!etf) return res.status(404).json({ success: false, error: 'ETF non trovato' });
+    const etf = await ETF.findByPk(etfId, { transaction });
+    if (!etf) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, error: 'ETF non trovato' });
+    }
 
-    if (operationType === 'sell') {
-      const [position] = await sequelize.query(`
-        SELECT COALESCE(SUM(CASE WHEN operation_type = 'buy' THEN quantity ELSE -quantity END), 0) AS quantity
-        FROM real_portfolio_operations
-        WHERE user_id = :userId AND real_portfolio_id = :portfolioId AND etf_id = :etfId
-      `, { replacements: { userId: req.user.id, portfolioId: portfolio.id, etfId }, type: QueryTypes.SELECT });
-      if (Number(position?.quantity ?? 0) < quantity) {
-        return res.status(400).json({ success: false, error: 'Quantità da vendere superiore alla posizione disponibile' });
-      }
+    let position = await RealPortfolioEtf.findOne({
+      where: { realPortfolioId: portfolio.id, etfId },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    const currentQuantity = Number(position?.quantity ?? 0);
+    const nextQuantity = operationType === 'buy' ? currentQuantity + quantity : currentQuantity - quantity;
+
+    if (nextQuantity < 0) {
+      await transaction.rollback();
+      return res.status(400).json({ success: false, error: 'Quantità da vendere superiore alla posizione disponibile' });
     }
 
     const operation = await RealPortfolioOperation.create({
-      userId: req.user.id,
-      realPortfolioId: portfolio.id,
-      operationType,
-      etfId,
-      operationDate,
-      quantity,
-      unitPrice
-    });
+      userId: req.user.id, realPortfolioId: portfolio.id, operationType, etfId, operationDate, quantity, unitPrice
+    }, { transaction });
 
+    if (position) {
+      if (nextQuantity === 0) await position.destroy({ transaction });
+      else await position.update({ quantity: nextQuantity }, { transaction });
+    } else {
+      if (operationType !== 'buy') {
+        await transaction.rollback();
+        return res.status(400).json({ success: false, error: 'ETF non presente nel portafoglio' });
+      }
+      position = await RealPortfolioEtf.create({ realPortfolioId: portfolio.id, etfId, quantity: nextQuantity }, { transaction });
+    }
+
+    await transaction.commit();
     res.status(201).json({
       success: true,
       data: {
-        id: operation.id,
-        portfolioId: operation.realPortfolioId,
-        operationType: operation.operationType,
+        id: operation.id, portfolioId: operation.realPortfolioId, operationType: operation.operationType,
         etf: { id: etf.id, isin: etf.isin, ticker: etf.ticker, name: etf.name, nickname: etf.nickname },
-        operationDate: operation.operationDate,
-        quantity: operation.quantity,
-        unitPrice: operation.unitPrice
+        operationDate: operation.operationDate, quantity: operation.quantity, unitPrice: operation.unitPrice,
+        portfolioQuantity: nextQuantity
       }
     });
-  } catch (error) { next(error); }
+  } catch (error) {
+    if (!transaction.finished) await transaction.rollback();
+    next(error);
+  }
 };
-
 
 exports.getHoldings = async (req, res, next) => {
   try {
@@ -135,18 +153,15 @@ exports.getHoldings = async (req, res, next) => {
     });
     if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
 
-    const holdings = await sequelize.query(`
-      SELECT e.id, e.isin, e.ticker, e.name, e.nickname,
-             SUM(CASE WHEN o.operation_type = 'buy' THEN o.quantity ELSE -o.quantity END) AS quantity
-        FROM real_portfolio_operations o
-        JOIN anagrafica_etf e ON e.id = o.etf_id
-       WHERE o.user_id = :userId AND o.real_portfolio_id = :portfolioId
-       GROUP BY e.id, e.isin, e.ticker, e.name, e.nickname
-      HAVING SUM(CASE WHEN o.operation_type = 'buy' THEN o.quantity ELSE -o.quantity END) > 0
-       ORDER BY COALESCE(e.nickname, e.ticker, e.name), e.isin
-    `, { replacements: { userId: req.user.id, portfolioId: portfolio.id }, type: QueryTypes.SELECT });
-
-    res.status(200).json({ success: true, data: holdings });
+    const holdings = await RealPortfolioEtf.findAll({
+      where: { realPortfolioId: portfolio.id },
+      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname'] }],
+      order: [['etfId', 'ASC']]
+    });
+    res.status(200).json({ success: true, data: holdings.map((row) => ({
+      id: row.etf.id, isin: row.etf.isin, ticker: row.etf.ticker, name: row.etf.name,
+      nickname: row.etf.nickname, quantity: row.quantity
+    })) });
   } catch (error) { next(error); }
 };
 
