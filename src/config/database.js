@@ -39,6 +39,29 @@ const initializeAssociations = () => {
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
   const RealPortfolioEtf = require('../models/RealPortfolioEtf');
   const RealPortfolioOrder = require('../models/RealPortfolioOrder');
+  const Factor = require('../models/Factor');
+  const FactorScenarioStatistic = require('../models/FactorScenarioStatistic');
+  const FactorCorrelation = require('../models/FactorCorrelation');
+  const EtfFactorExposure = require('../models/EtfFactorExposure');
+  const EtfSpecificRisk = require('../models/EtfSpecificRisk');
+  const EtfModelFit = require('../models/EtfModelFit');
+
+  if (!Factor.associations.children) Factor.hasMany(Factor, { foreignKey: 'parentFactorId', as: 'children' });
+  if (!Factor.associations.parent) Factor.belongsTo(Factor, { foreignKey: 'parentFactorId', as: 'parent' });
+  if (!Factor.associations.scenarioStatistics) Factor.hasMany(FactorScenarioStatistic, { foreignKey: 'factorId', as: 'scenarioStatistics', onDelete: 'CASCADE' });
+  if (!FactorScenarioStatistic.associations.factor) FactorScenarioStatistic.belongsTo(Factor, { foreignKey: 'factorId', as: 'factor' });
+  if (!Factor.associations.exposures) Factor.hasMany(EtfFactorExposure, { foreignKey: 'factorId', as: 'exposures', onDelete: 'CASCADE' });
+  if (!EtfFactorExposure.associations.factor) EtfFactorExposure.belongsTo(Factor, { foreignKey: 'factorId', as: 'factor' });
+  if (!ETF.associations.factorExposures) ETF.hasMany(EtfFactorExposure, { foreignKey: 'etfId', as: 'factorExposures', onDelete: 'CASCADE' });
+  if (!EtfFactorExposure.associations.etf) EtfFactorExposure.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  if (!ETF.associations.specificRisk) ETF.hasOne(EtfSpecificRisk, { foreignKey: 'etfId', as: 'specificRisk', onDelete: 'CASCADE' });
+  if (!EtfSpecificRisk.associations.etf) EtfSpecificRisk.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  if (!ETF.associations.modelFits) ETF.hasMany(EtfModelFit, { foreignKey: 'etfId', as: 'modelFits', onDelete: 'CASCADE' });
+  if (!EtfModelFit.associations.etf) EtfModelFit.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  if (!Factor.associations.correlationsAsFirst) Factor.hasMany(FactorCorrelation, { foreignKey: 'factor1Id', as: 'correlationsAsFirst', onDelete: 'CASCADE' });
+  if (!Factor.associations.correlationsAsSecond) Factor.hasMany(FactorCorrelation, { foreignKey: 'factor2Id', as: 'correlationsAsSecond', onDelete: 'CASCADE' });
+  if (!FactorCorrelation.associations.factor1) FactorCorrelation.belongsTo(Factor, { foreignKey: 'factor1Id', as: 'factor1' });
+  if (!FactorCorrelation.associations.factor2) FactorCorrelation.belongsTo(Factor, { foreignKey: 'factor2Id', as: 'factor2' });
 
   for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli']]) {
     if (!User.associations[alias]) User.hasMany(model, { foreignKey: 'userId', as: alias });
