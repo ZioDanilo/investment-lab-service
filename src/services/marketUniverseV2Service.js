@@ -88,7 +88,8 @@ class MarketUniverseV2Service {
       const macroSnapshot = await this.buildMacroSnapshot([assetOrder[0]]);
       let runtime = await import('investment-lab-core');
       if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
-        runtime = await import('investment-lab-core/src/factors/factor-market-universe.js').catch(() => runtime);
+        const factorRuntime = await import('investment-lab-core/src/factors/factor-market-universe.js').catch(() => ({}));
+        runtime = { ...runtime, ...factorRuntime };
       }
       if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function' || typeof runtime.generateMonthlyMacroTimeline !== 'function') {
         throw Object.assign(new Error('Factor Engine V2 generation runtime is unavailable'), { code: 'MARKET_UNIVERSE_V2_RUNTIME_MISSING', statusCode: 500 });
