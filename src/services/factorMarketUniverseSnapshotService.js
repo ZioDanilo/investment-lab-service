@@ -9,6 +9,7 @@ const EtfModelFit = require('../models/EtfModelFit');
 
 const REQUIRED_SCENARIOS = ['general','expansion','soft_landing','recession','stagflation'];
 const GENERATION_SCENARIOS = ['expansion','soft_landing','recession','stagflation'];
+const FACTOR_RETURN_MODES = ['compounded_return','additive_shock'];
 
 const finite = (value, label, details = {}) => {
   const n = Number(value);
@@ -60,7 +61,9 @@ class FactorMarketUniverseSnapshotService {
       const byScenario = statsByFactor.get(factor.id) || new Map();
       const missing = REQUIRED_SCENARIOS.filter(s => !byScenario.has(s));
       if (missing.length) this.fail('MISSING_FACTOR_SCENARIO_STATISTICS', `Factor ${factor.code} is missing scenario statistics`, { factorId: factor.id, missing });
-      return { ...factor, statistics: Object.fromEntries(byScenario) };
+      const returnMode = factor.returnMode || 'compounded_return';
+      if (!FACTOR_RETURN_MODES.includes(returnMode)) this.fail('INVALID_FACTOR_RETURN_MODE', `Factor ${factor.code} has an unsupported return mode`, { factorId: factor.id, returnMode });
+      return { ...factor, returnMode, statistics: Object.fromEntries(byScenario) };
     });
 
     const corrByScenario = {};
@@ -131,4 +134,4 @@ class FactorMarketUniverseSnapshotService {
   }
 }
 
-module.exports = { FactorMarketUniverseSnapshotService, REQUIRED_SCENARIOS, GENERATION_SCENARIOS };
+module.exports = { FactorMarketUniverseSnapshotService, REQUIRED_SCENARIOS, GENERATION_SCENARIOS, FACTOR_RETURN_MODES };
