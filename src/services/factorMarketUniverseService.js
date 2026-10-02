@@ -1,5 +1,10 @@
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 
+const expectedMonthlyFactorMean = (factor, annualMean) => {
+  if ((factor.returnMode || 'compounded_return') === 'additive_shock') return annualMean / 12;
+  return Math.pow(1 + annualMean, 1 / 12) - 1;
+};
+
 class FactorMarketUniverseService {
   static async getReadiness() {
     const snapshot = await FactorMarketUniverseSnapshotService.build();
@@ -47,8 +52,6 @@ class FactorMarketUniverseService {
     const snapshot = await FactorMarketUniverseSnapshotService.build();
     let runtime = await import('investment-lab-core');
     if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
-      // The backend can temporarily run with an older installed file: dependency.
-      // Load the V2 module directly when the package root has not been refreshed yet.
       runtime = await import('investment-lab-core/src/factors/factor-market-universe.js').catch(() => runtime);
     }
     if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
@@ -64,6 +67,7 @@ class FactorMarketUniverseService {
     const result = runtime.generateMonthlyEtfReturnsFromFactors(snapshot, scenario, intensity, random);
     return { scenario, intensity: Number(intensity), seed: Number(seed), ...result };
   }
+
   static async statisticalTest({ scenario = 'expansion', intensity = 0.5, seed = 42, samples = 100000 } = {}) {
     const snapshot = await FactorMarketUniverseSnapshotService.build();
     const runtime = await import('investment-lab-core');
@@ -105,10 +109,10 @@ class FactorMarketUniverseService {
       const stressed = factor.statistics[scenario];
       const annualMean = Number(general.expectedReturn) + (Number(stressed.expectedReturn) - Number(general.expectedReturn)) * Number(intensity);
       const annualVol = Math.max(0, Number(general.volatility) + (Number(stressed.volatility) - Number(general.volatility)) * Number(intensity));
-      const expectedMean = Math.pow(1 + annualMean, 1 / 12) - 1;
+      const expectedMean = expectedMonthlyFactorMean(factor, annualMean);
       const expectedVol = annualVol / Math.sqrt(12);
       return {
-        factorId: factor.id, code: factor.code,
+        factorId: factor.id, code: factor.code, returnMode: factor.returnMode || 'compounded_return',
         expectedMonthlyMean: expectedMean, observedMonthlyMean: observedMeans[i],
         meanError: observedMeans[i] - expectedMean,
         expectedMonthlyVolatility: expectedVol, observedMonthlyVolatility: observedVols[i],
