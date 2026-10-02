@@ -50,8 +50,17 @@ class MarketUniverseV2Service {
   static async startRegeneration(options = {}) {
     const existing = await MarketUniverseRunV2.findOne({ where: { status: 'GENERATING' }, order: [['generatedAt','DESC']] });
     if (existing) return { accepted: true, alreadyInProgress: true, runId: existing.runId };
-    setImmediate(() => this.regenerate(options).catch((error) => console.error('[Market Universe V2 regeneration]', error)));
-    return { accepted: true, alreadyInProgress: false, version: 2 };
+    const seed = Number(options.seed ?? 42);
+    const pathCount = Number(options.pathCount ?? 1000);
+    const monthCount = Number(options.monthCount ?? 360);
+    // Persist GENERATING before acknowledging HTTP so polling can never observe
+    // a false idle window while factor snapshots/preparation are still running.
+    const run = await MarketUniverseRunV2.create({
+      seed, pathCount, monthCount, assetCount: 0, assetOrder: [],
+      status: 'GENERATING', active: false, generationProgress: 1
+    });
+    setImmediate(() => this.regenerate({ ...options, seed, pathCount, monthCount, _runId: run.runId }).catch((error) => console.error('[Market Universe V2 regeneration]', error)));
+    return { accepted: true, alreadyInProgress: false, version: 2, runId: run.runId };
   }
 
   static async buildMacroSnapshot(isins) {
@@ -68,8 +77,8 @@ class MarketUniverseV2Service {
     return buildMonteCarloSnapshot({ isins, etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties, correlations });
   }
 
-  static async regenerate({ seed = 42, pathCount = 1000, monthCount = 360 } = {}) {
-    let run = null;
+  static async regenerate({ seed = 42, pathCount = 1000, monthCount = 360, _runId = null } = {}) {
+    let run = _runId ? await MarketUniverseRunV2.findByPk(_runId) : null;
     try {
       const factorSnapshotRaw = await FactorMarketUniverseSnapshotService.build();
       const operationalEtfs = factorSnapshotRaw.etfs.filter((etf) =>
@@ -95,10 +104,14 @@ class MarketUniverseV2Service {
         throw Object.assign(new Error('Factor Engine V2 generation runtime is unavailable'), { code: 'MARKET_UNIVERSE_V2_RUNTIME_MISSING', statusCode: 500 });
       }
 
-      run = await MarketUniverseRunV2.create({
-        seed: Number(seed), pathCount: Number(pathCount), monthCount: Number(monthCount),
-        assetCount: operationalEtfs.length, assetOrder, status: 'GENERATING', active: false, generationProgress: 0
-      });
+      if (!run) {
+        run = await MarketUniverseRunV2.create({
+          seed: Number(seed), pathCount: Number(pathCount), monthCount: Number(monthCount),
+          assetCount: operationalEtfs.length, assetOrder, status: 'GENERATING', active: false, generationProgress: 1
+        });
+      } else {
+        await run.update({ assetCount: operationalEtfs.length, assetOrder, generationProgress: 1 });
+      }
 
       const totalValues = Number(pathCount) * Number(monthCount);
       const returnsByIsin = new Map(assetOrder.map((isin) => [isin, new Float32Array(totalValues)]));
