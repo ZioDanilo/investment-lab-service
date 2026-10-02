@@ -82,8 +82,14 @@ class MarketUniverseV2Service {
         etfs: operationalEtfs.map((etf) => ({ ...etf, ready: true }))
       };
       const assetOrder = operationalEtfs.map((etf) => normalizeIsin(etf.isin));
-      const macroSnapshot = await this.buildMacroSnapshot(assetOrder);
-      const runtime = await import('investment-lab-core');
+      // Macro-state generation is global: one calibrated ETF is sufficient to let the
+      // legacy snapshot builder validate/normalize the shared Markov/intensity config.
+      // V2 ETF returns themselves come exclusively from the factor snapshot below.
+      const macroSnapshot = await this.buildMacroSnapshot([assetOrder[0]]);
+      let runtime = await import('investment-lab-core');
+      if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
+        runtime = await import('investment-lab-core/src/factors/factor-market-universe.js').catch(() => runtime);
+      }
       if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function' || typeof runtime.generateMonthlyMacroTimeline !== 'function') {
         throw Object.assign(new Error('Factor Engine V2 generation runtime is unavailable'), { code: 'MARKET_UNIVERSE_V2_RUNTIME_MISSING', statusCode: 500 });
       }
