@@ -45,7 +45,17 @@ class FactorMarketUniverseService {
 
   static async generateSample({ scenario = 'expansion', intensity = 0.5, seed = 42 } = {}) {
     const snapshot = await FactorMarketUniverseSnapshotService.build();
-    const runtime = await import('investment-lab-core');
+    let runtime = await import('investment-lab-core');
+    if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
+      // The backend can temporarily run with an older installed file: dependency.
+      // Load the V2 module directly when the package root has not been refreshed yet.
+      runtime = await import('investment-lab-core/src/factors/factor-market-universe.js').catch(() => runtime);
+    }
+    if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
+      const error = new Error('Factor Engine V2 runtime is not installed in investment-lab-core. Refresh/reinstall the local core dependency.');
+      error.statusCode = 500;
+      throw error;
+    }
     let state = Number(seed) >>> 0;
     const random = () => {
       state = (Math.imul(1664525, state) + 1013904223) >>> 0;
