@@ -174,32 +174,50 @@ class MarketUniverseV2Service {
   }
 
   static async buildBinaryPortfolioProjection({ holdings = [] } = {}) {
+    const totalStartedAt = process.hrtime.bigint();
+    const msSince = (startedAt) => Number(process.hrtime.bigint() - startedAt) / 1e6;
     const normalized = this.normalizeHoldings(holdings);
+
+    const activeRunStartedAt = process.hrtime.bigint();
     const run = await this.getActiveRun();
+    const activeRunMs = msSince(activeRunStartedAt);
+
     const requestedIsins = normalized.map((h) => h.isin);
+    const dbStartedAt = process.hrtime.bigint();
     const rows = await MarketUniverseEtfV2.findAll({
       where: { runId: run.runId, isin: { [Op.in]: requestedIsins } },
       attributes: ['isin','returnsBinary','valueCount'],
       raw: true
     });
+    const dbReadMs = msSince(dbStartedAt);
+    const bytesRead = rows.reduce((sum, row) => sum + (Buffer.isBuffer(row.returnsBinary) ? row.returnsBinary.length : Buffer.byteLength(row.returnsBinary || [])), 0);
+
     const byIsin = new Map(rows.map((row) => [normalizeIsin(row.isin), row]));
     const missing = requestedIsins.filter((isin) => !byIsin.has(isin));
     if (missing.length) throw Object.assign(new Error(`ETF not present in active Market Universe V2: ${missing.join(', ')}`), { code: 'MISSING_ETF_IN_ACTIVE_MARKET_UNIVERSE_V2', statusCode: 409 });
 
     const totalValues = Number(run.pathCount) * Number(run.monthCount);
     const weightedReturns = new Float64Array(totalValues);
+    let decodeAggregateMs = 0;
+    const aggregationStartedAt = process.hrtime.bigint();
     for (const holding of normalized) {
       const row = byIsin.get(holding.isin);
+      const decodeStartedAt = process.hrtime.bigint();
       const values = bufferToFloat32(row.returnsBinary);
+      decodeAggregateMs += msSince(decodeStartedAt);
       if (values.length !== totalValues) throw Object.assign(new Error(`Invalid V2 vector geometry for ${holding.isin}`), { code: 'INVALID_MARKET_UNIVERSE_V2_GEOMETRY', statusCode: 409 });
       for (let i = 0; i < totalValues; i += 1) weightedReturns[i] += holding.weight * values[i];
     }
+    const aggregateMs = msSince(aggregationStartedAt);
 
+    const macroStartedAt = process.hrtime.bigint();
     const scenarioBuffer = Buffer.isBuffer(run.scenarioBinary) ? run.scenarioBinary : Buffer.from(run.scenarioBinary || []);
     const intensityValues = bufferToFloat32(run.intensityBinary);
     if (scenarioBuffer.length !== totalValues || intensityValues.length !== totalValues) throw Object.assign(new Error('Invalid V2 macro vector geometry'), { code: 'INVALID_MARKET_UNIVERSE_V2_MACRO_GEOMETRY', statusCode: 409 });
-
     const scenarios = Array.from(scenarioBuffer, decodeScenario);
+    const macroDecodeMs = msSince(macroStartedAt);
+
+    const encodeStartedAt = process.hrtime.bigint();
     const binary = encodeMarketUniverseBinary({
       runId: String(run.runId),
       pathCount: Number(run.pathCount),
@@ -209,7 +227,24 @@ class MarketUniverseV2Service {
       intensities: Array.from(intensityValues),
       scenarios
     });
-    return { buffer: binary, runId: run.runId, version: 2, payloadType: 'FULL', pathCount: Number(run.pathCount), monthCount: Number(run.monthCount), selectedAssetCount: rows.length };
+    const binaryEncodeMs = msSince(encodeStartedAt);
+    const totalMs = msSince(totalStartedAt);
+
+    const telemetry = {
+      selectedAssetCount: rows.length,
+      bytesRead,
+      responseBytes: binary.length,
+      activeRunMs: Number(activeRunMs.toFixed(2)),
+      dbReadMs: Number(dbReadMs.toFixed(2)),
+      decodeAggregateMs: Number(decodeAggregateMs.toFixed(2)),
+      aggregateMs: Number(aggregateMs.toFixed(2)),
+      macroDecodeMs: Number(macroDecodeMs.toFixed(2)),
+      binaryEncodeMs: Number(binaryEncodeMs.toFixed(2)),
+      totalMs: Number(totalMs.toFixed(2))
+    };
+    console.info('[MU V2 projection telemetry]', telemetry);
+
+    return { buffer: binary, runId: run.runId, version: 2, payloadType: 'FULL', pathCount: Number(run.pathCount), monthCount: Number(run.monthCount), selectedAssetCount: rows.length, telemetry };
   }
 }
 
