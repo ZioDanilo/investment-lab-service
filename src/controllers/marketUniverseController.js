@@ -180,6 +180,19 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
     res.setHeader('X-Market-Universe-Payload-Type', 'FULL');
     res.setHeader('X-Market-Universe-Path-Count', String(payload.pathCount || 0));
     res.setHeader('X-Market-Universe-Month-Count', String(payload.monthCount || 0));
+    if (payload.telemetry) {
+      res.setHeader('Server-Timing', [
+        `activeRun;dur=${payload.telemetry.activeRunMs}`,
+        `db;dur=${payload.telemetry.dbReadMs}`,
+        `aggregate;dur=${payload.telemetry.aggregateMs}`,
+        `macro;dur=${payload.telemetry.macroDecodeMs}`,
+        `encode;dur=${payload.telemetry.binaryEncodeMs}`,
+        `total;dur=${payload.telemetry.totalMs}`
+      ].join(', '));
+      res.setHeader('X-MU-V2-Selected-Assets', String(payload.telemetry.selectedAssetCount || 0));
+      res.setHeader('X-MU-V2-Bytes-Read', String(payload.telemetry.bytesRead || 0));
+      res.setHeader('X-MU-V2-Response-Bytes', String(payload.telemetry.responseBytes || payload.buffer?.length || 0));
+    }
     return res.status(200).type('application/octet-stream').send(payload.buffer);
   } catch (error) {
     return res.status(Number(error?.statusCode) || 500).json({ success: false, code: error?.code || 'MARKET_UNIVERSE_V2_PROJECTION_FAILED', error: error?.message || 'Market Universe V2 projection failed' });
