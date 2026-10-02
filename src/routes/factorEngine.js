@@ -7,6 +7,7 @@ router.get('/factors', controller.listFactors);
 router.get('/universe/readiness', universe.readiness);
 router.get('/universe/preview', universe.preview);
 router.post('/universe/sample', universe.sample);
+router.post('/universe/statistical-test', universe.statisticalTest);
 router.get('/scenarios/:scenario', controller.getScenarioSnapshot);
 router.get('/etf/:etfId', controller.getEtfModel);
 router.put('/etf/:etfId/exposures/:factorId', controller.upsertExposure);
