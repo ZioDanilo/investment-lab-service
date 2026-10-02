@@ -1,4 +1,5 @@
 const { MarketUniverseService } = require('../services/marketUniverseService');
+const { MarketUniverseV2Service } = require('../services/marketUniverseV2Service');
 
 const getAllAssets = async (req, res, next) => {
   try {
@@ -154,6 +155,37 @@ const warmupActiveMarketUniverseCache = async (req, res, next) => {
   }
 };
 
+const regenerateMarketUniverseV2 = async (req, res) => {
+  try {
+    const data = await MarketUniverseV2Service.startRegeneration(req.body || {});
+    return res.status(202).json({ success: true, data });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({ success: false, code: error?.code || 'MARKET_UNIVERSE_V2_GENERATION_FAILED', error: error?.message || 'Market Universe V2 generation failed' });
+  }
+};
+
+const getMarketUniverseV2GenerationStatus = async (req, res) => {
+  try {
+    return res.status(200).json({ success: true, data: await MarketUniverseV2Service.getGenerationStatus() });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({ success: false, code: error?.code || 'MARKET_UNIVERSE_V2_STATUS_FAILED', error: error?.message || 'Market Universe V2 status failed' });
+  }
+};
+
+const buildBinaryPortfolioProjectionV2 = async (req, res) => {
+  try {
+    const payload = await MarketUniverseV2Service.buildBinaryPortfolioProjection(req.body || {});
+    res.setHeader('X-Market-Universe-Run-Id', String(payload.runId || ''));
+    res.setHeader('X-Market-Universe-Version', '2');
+    res.setHeader('X-Market-Universe-Payload-Type', 'FULL');
+    res.setHeader('X-Market-Universe-Path-Count', String(payload.pathCount || 0));
+    res.setHeader('X-Market-Universe-Month-Count', String(payload.monthCount || 0));
+    return res.status(200).type('application/octet-stream').send(payload.buffer);
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({ success: false, code: error?.code || 'MARKET_UNIVERSE_V2_PROJECTION_FAILED', error: error?.message || 'Market Universe V2 projection failed' });
+  }
+};
+
 module.exports = {
   getAllAssets,
   getAssetById,
@@ -164,5 +196,8 @@ module.exports = {
   buildBinaryPortfolioProjectionFromActiveMarketUniverse,
   getMarketUniverseGenerationStatus,
   getActiveMarketUniverseCacheStatus,
-  warmupActiveMarketUniverseCache
+  warmupActiveMarketUniverseCache,
+  regenerateMarketUniverseV2,
+  getMarketUniverseV2GenerationStatus,
+  buildBinaryPortfolioProjectionV2
 };

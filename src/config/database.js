@@ -36,6 +36,8 @@ const initializeAssociations = () => {
   const MarketUniverseRun = require('../models/MarketUniverseRun');
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
+  const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
+  const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
   const RealPortfolioEtf = require('../models/RealPortfolioEtf');
   const RealPortfolioOrder = require('../models/RealPortfolioOrder');
@@ -191,6 +193,9 @@ const initializeAssociations = () => {
       targetKey: 'runId'
     });
   }
+
+  if (!MarketUniverseRunV2.associations.etfs) MarketUniverseRunV2.hasMany(MarketUniverseEtfV2, { foreignKey: 'runId', as: 'etfs', onDelete: 'CASCADE' });
+  if (!MarketUniverseEtfV2.associations.run) MarketUniverseEtfV2.belongsTo(MarketUniverseRunV2, { foreignKey: 'runId', targetKey: 'runId', as: 'run' });
 };
 
 const connectDB = async () => {
@@ -244,6 +249,8 @@ const connectDB = async () => {
     const EtfFactorExposure = require('../models/EtfFactorExposure');
     const EtfSpecificRisk = require('../models/EtfSpecificRisk');
     const EtfModelFit = require('../models/EtfModelFit');
+    const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
+    const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 
     // Sync models with database
     try {
@@ -268,6 +275,8 @@ const connectDB = async () => {
     void EtfFactorExposure;
     void EtfSpecificRisk;
     void EtfModelFit;
+    void MarketUniverseRunV2;
+    void MarketUniverseEtfV2;
 
     return sequelize;
   } catch (error) {
