@@ -247,7 +247,7 @@ const connectDB = async () => {
 
     // Sync models with database
     try {
-      await sequelize.sync({ alter: true });
+      await sequelize.sync();
       console.log('Database models synced');
     } catch (syncError) {
       console.warn('Database sync warning (non-fatal):', syncError.message);
