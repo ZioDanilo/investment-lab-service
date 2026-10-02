@@ -9,6 +9,12 @@ const Factor = sequelize.define('Factor', {
   assetClass: { type: DataTypes.STRING(64), allowNull: true },
   parentFactorId: { type: DataTypes.UUID, allowNull: true },
   description: { type: DataTypes.TEXT, allowNull: true },
+  returnMode: {
+    type: DataTypes.ENUM('compounded_return','additive_shock'),
+    allowNull: false,
+    defaultValue: 'compounded_return',
+    comment: 'compounded_return for investable/carry factors; additive_shock for non-investable macro shocks such as rate/duration shocks'
+  },
   active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
   sortOrder: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 }
 }, {
