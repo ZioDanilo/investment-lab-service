@@ -12,6 +12,7 @@ const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL } = require('../utils/marketUniverseBinaryTransport');
+const marketUniverseV2Cache = require('./marketUniverseV2Cache');
 
 const SCENARIOS = ['expansion','soft_landing','recession','stagflation'];
 const scenarioCode = (value) => Math.max(0, SCENARIOS.indexOf(String(value || 'expansion')));
@@ -28,8 +29,11 @@ const bufferToFloat32 = (value) => {
 
 class MarketUniverseV2Service {
   static async getActiveRun() {
+    const cachedRun = marketUniverseV2Cache.getRun();
+    if (cachedRun) return cachedRun;
     const run = await MarketUniverseRunV2.findOne({ where: { active: true, status: 'ACTIVE' }, order: [['generatedAt','DESC']] });
     if (!run) throw Object.assign(new Error('No active Market Universe V2 is available'), { code: 'ACTIVE_MARKET_UNIVERSE_V2_NOT_FOUND', statusCode: 404 });
+    marketUniverseV2Cache.setRun(run);
     return run;
   }
 
@@ -153,6 +157,8 @@ class MarketUniverseV2Service {
       const previous = await MarketUniverseRunV2.findOne({ where: { active: true }, order: [['generatedAt','DESC']] });
       if (previous && previous.runId !== run.runId) await previous.update({ active: false, status: 'READY' });
       await run.update({ active: true, status: 'ACTIVE', generationProgress: 100 });
+      marketUniverseV2Cache.invalidate();
+      marketUniverseV2Cache.setRun(run);
       if (previous && previous.runId !== run.runId) {
         await MarketUniverseEtfV2.destroy({ where: { runId: previous.runId } });
         await previous.destroy();
@@ -181,31 +187,51 @@ class MarketUniverseV2Service {
     const activeRunStartedAt = process.hrtime.bigint();
     const run = await this.getActiveRun();
     const activeRunMs = msSince(activeRunStartedAt);
+    marketUniverseV2Cache.ensureRun(run);
 
     const requestedIsins = normalized.map((h) => h.isin);
+    const valuesByIsin = new Map();
+    const missingIsins = [];
+    let cacheHits = 0;
+    for (const isin of requestedIsins) {
+      const cached = marketUniverseV2Cache.getEtf(run.runId, isin);
+      if (cached) {
+        valuesByIsin.set(isin, cached);
+        cacheHits += 1;
+      } else {
+        missingIsins.push(isin);
+      }
+    }
+
     const dbStartedAt = process.hrtime.bigint();
-    const rows = await MarketUniverseEtfV2.findAll({
-      where: { runId: run.runId, isin: { [Op.in]: requestedIsins } },
+    const rows = missingIsins.length > 0 ? await MarketUniverseEtfV2.findAll({
+      where: { runId: run.runId, isin: { [Op.in]: missingIsins } },
       attributes: ['isin','returnsBinary','valueCount'],
       raw: true
-    });
+    }) : [];
     const dbReadMs = msSince(dbStartedAt);
     const bytesRead = rows.reduce((sum, row) => sum + (Buffer.isBuffer(row.returnsBinary) ? row.returnsBinary.length : Buffer.byteLength(row.returnsBinary || [])), 0);
 
-    const byIsin = new Map(rows.map((row) => [normalizeIsin(row.isin), row]));
-    const missing = requestedIsins.filter((isin) => !byIsin.has(isin));
+    const rowsByIsin = new Map(rows.map((row) => [normalizeIsin(row.isin), row]));
+    const missing = missingIsins.filter((isin) => !rowsByIsin.has(isin));
     if (missing.length) throw Object.assign(new Error(`ETF not present in active Market Universe V2: ${missing.join(', ')}`), { code: 'MISSING_ETF_IN_ACTIVE_MARKET_UNIVERSE_V2', statusCode: 409 });
 
     const totalValues = Number(run.pathCount) * Number(run.monthCount);
-    const weightedReturns = new Float64Array(totalValues);
     let decodeAggregateMs = 0;
-    const aggregationStartedAt = process.hrtime.bigint();
-    for (const holding of normalized) {
-      const row = byIsin.get(holding.isin);
+    for (const isin of missingIsins) {
+      const row = rowsByIsin.get(isin);
       const decodeStartedAt = process.hrtime.bigint();
       const values = bufferToFloat32(row.returnsBinary);
       decodeAggregateMs += msSince(decodeStartedAt);
-      if (values.length !== totalValues) throw Object.assign(new Error(`Invalid V2 vector geometry for ${holding.isin}`), { code: 'INVALID_MARKET_UNIVERSE_V2_GEOMETRY', statusCode: 409 });
+      if (values.length !== totalValues) throw Object.assign(new Error(`Invalid V2 vector geometry for ${isin}`), { code: 'INVALID_MARKET_UNIVERSE_V2_GEOMETRY', statusCode: 409 });
+      valuesByIsin.set(isin, values);
+      marketUniverseV2Cache.setEtf(run.runId, isin, values);
+    }
+
+    const weightedReturns = new Float64Array(totalValues);
+    const aggregationStartedAt = process.hrtime.bigint();
+    for (const holding of normalized) {
+      const values = valuesByIsin.get(holding.isin);
       for (let i = 0; i < totalValues; i += 1) weightedReturns[i] += holding.weight * values[i];
     }
     const aggregateMs = msSince(aggregationStartedAt);
@@ -231,7 +257,11 @@ class MarketUniverseV2Service {
     const totalMs = msSince(totalStartedAt);
 
     const telemetry = {
-      selectedAssetCount: rows.length,
+      selectedAssetCount: requestedIsins.length,
+      cacheHits,
+      cacheMisses: missingIsins.length,
+      cachedEtfs: marketUniverseV2Cache.status().cachedEtfs,
+      cacheMaxEtfs: marketUniverseV2Cache.status().maxEtfs,
       bytesRead,
       responseBytes: binary.length,
       activeRunMs: Number(activeRunMs.toFixed(2)),
@@ -244,7 +274,7 @@ class MarketUniverseV2Service {
     };
     console.info('[MU V2 projection telemetry]', telemetry);
 
-    return { buffer: binary, runId: run.runId, version: 2, payloadType: 'FULL', pathCount: Number(run.pathCount), monthCount: Number(run.monthCount), selectedAssetCount: rows.length, telemetry };
+    return { buffer: binary, runId: run.runId, version: 2, payloadType: 'FULL', pathCount: Number(run.pathCount), monthCount: Number(run.monthCount), selectedAssetCount: requestedIsins.length, telemetry };
   }
 }
 
