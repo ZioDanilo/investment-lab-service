@@ -12,5 +12,9 @@ router.post('/cache/warmup', marketUniverseController.warmupActiveMarketUniverse
 router.post('/portfolio/projection', marketUniverseController.buildPortfolioProjectionFromActiveMarketUniverse);
 router.post('/portfolio/projection/binary', marketUniverseController.buildBinaryPortfolioProjectionFromActiveMarketUniverse);
 router.post('/regenerate', marketUniverseController.regenerateMarketUniverse);
+// V2 is intentionally isolated from the legacy Market Universe and its warm-up cache.
+router.get('/v2/generation-status', marketUniverseController.getMarketUniverseV2GenerationStatus);
+router.post('/v2/regenerate', marketUniverseController.regenerateMarketUniverseV2);
+router.post('/v2/portfolio/projection/binary', marketUniverseController.buildBinaryPortfolioProjectionV2);
 
 module.exports = router;

@@ -15,6 +15,7 @@ const monteCarloRoutes = require('./routes/montecarlo');
 const marketUniverseRoutes = require('./routes/marketUniverse');
 const realPortfolioRoutes = require('./routes/realPortfolio');
 const authRoutes = require('./routes/auth');
+const factorEngineRoutes = require('./routes/factorEngine');
 
 const app = express();
 
@@ -82,6 +83,7 @@ app.use('/api/quotations', quotationRoutes);
 app.use('/api/monte-carlo', monteCarloRoutes);
 app.use('/api/market-universe', marketUniverseRoutes);
 app.use('/api/real-portfolios', realPortfolioRoutes);
+app.use('/api/factor-engine', factorEngineRoutes);
 
 // 404 Handler
 app.use((req, res) => {

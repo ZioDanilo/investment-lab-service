@@ -36,9 +36,38 @@ const initializeAssociations = () => {
   const MarketUniverseRun = require('../models/MarketUniverseRun');
   const MarketUniverseMonth = require('../models/MarketUniverseMonth');
   const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
+  const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
+  const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
   const RealPortfolioEtf = require('../models/RealPortfolioEtf');
   const RealPortfolioOrder = require('../models/RealPortfolioOrder');
+  const Factor = require('../models/Factor');
+  const FactorScenarioStatistic = require('../models/FactorScenarioStatistic');
+  const FactorCorrelation = require('../models/FactorCorrelation');
+  const EtfFactorExposure = require('../models/EtfFactorExposure');
+  const EtfSpecificRisk = require('../models/EtfSpecificRisk');
+  const EtfModelFit = require('../models/EtfModelFit');
+  const InvestmentIndex = require('../models/InvestmentIndex');
+
+  if (!InvestmentIndex.associations.etfs) InvestmentIndex.hasMany(ETF, { foreignKey: 'indexId', as: 'etfs' });
+  if (!ETF.associations.underlyingIndex) ETF.belongsTo(InvestmentIndex, { foreignKey: 'indexId', as: 'underlyingIndex' });
+
+  if (!Factor.associations.children) Factor.hasMany(Factor, { foreignKey: 'parentFactorId', as: 'children' });
+  if (!Factor.associations.parent) Factor.belongsTo(Factor, { foreignKey: 'parentFactorId', as: 'parent' });
+  if (!Factor.associations.scenarioStatistics) Factor.hasMany(FactorScenarioStatistic, { foreignKey: 'factorId', as: 'scenarioStatistics', onDelete: 'CASCADE' });
+  if (!FactorScenarioStatistic.associations.factor) FactorScenarioStatistic.belongsTo(Factor, { foreignKey: 'factorId', as: 'factor' });
+  if (!Factor.associations.exposures) Factor.hasMany(EtfFactorExposure, { foreignKey: 'factorId', as: 'exposures', onDelete: 'CASCADE' });
+  if (!EtfFactorExposure.associations.factor) EtfFactorExposure.belongsTo(Factor, { foreignKey: 'factorId', as: 'factor' });
+  if (!ETF.associations.factorExposures) ETF.hasMany(EtfFactorExposure, { foreignKey: 'etfId', as: 'factorExposures', onDelete: 'CASCADE' });
+  if (!EtfFactorExposure.associations.etf) EtfFactorExposure.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  if (!ETF.associations.specificRisk) ETF.hasOne(EtfSpecificRisk, { foreignKey: 'etfId', as: 'specificRisk', onDelete: 'CASCADE' });
+  if (!EtfSpecificRisk.associations.etf) EtfSpecificRisk.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  if (!ETF.associations.modelFits) ETF.hasMany(EtfModelFit, { foreignKey: 'etfId', as: 'modelFits', onDelete: 'CASCADE' });
+  if (!EtfModelFit.associations.etf) EtfModelFit.belongsTo(ETF, { foreignKey: 'etfId', as: 'etf' });
+  if (!Factor.associations.correlationsAsFirst) Factor.hasMany(FactorCorrelation, { foreignKey: 'factor1Id', as: 'correlationsAsFirst', onDelete: 'CASCADE' });
+  if (!Factor.associations.correlationsAsSecond) Factor.hasMany(FactorCorrelation, { foreignKey: 'factor2Id', as: 'correlationsAsSecond', onDelete: 'CASCADE' });
+  if (!FactorCorrelation.associations.factor1) FactorCorrelation.belongsTo(Factor, { foreignKey: 'factor1Id', as: 'factor1' });
+  if (!FactorCorrelation.associations.factor2) FactorCorrelation.belongsTo(Factor, { foreignKey: 'factor2Id', as: 'factor2' });
 
   for (const [model, alias] of [[Portfolio, 'legacyPortfolios'], [Portafoglio, 'portafogli']]) {
     if (!User.associations[alias]) User.hasMany(model, { foreignKey: 'userId', as: alias });
@@ -164,6 +193,9 @@ const initializeAssociations = () => {
       targetKey: 'runId'
     });
   }
+
+  if (!MarketUniverseRunV2.associations.etfs) MarketUniverseRunV2.hasMany(MarketUniverseEtfV2, { foreignKey: 'runId', as: 'etfs', onDelete: 'CASCADE' });
+  if (!MarketUniverseEtfV2.associations.run) MarketUniverseEtfV2.belongsTo(MarketUniverseRunV2, { foreignKey: 'runId', targetKey: 'runId', as: 'run' });
 };
 
 const connectDB = async () => {
@@ -206,9 +238,23 @@ const connectDB = async () => {
       console.warn('Unified portfolio migration warning:', migrationError.message);
     }
 
+    // Factor Engine V2 models must be explicitly loaded before sequelize.sync().
+    // Requiring them only inside initializeAssociations is not sufficient because
+    // that function is intentionally idempotent and the V2 schema must always be
+    // registered when the server starts.
+    const Factor = require('../models/Factor');
+    const FactorScenarioStatistic = require('../models/FactorScenarioStatistic');
+    const FactorCorrelation = require('../models/FactorCorrelation');
+    const InvestmentIndex = require('../models/InvestmentIndex');
+    const EtfFactorExposure = require('../models/EtfFactorExposure');
+    const EtfSpecificRisk = require('../models/EtfSpecificRisk');
+    const EtfModelFit = require('../models/EtfModelFit');
+    const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
+    const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
+
     // Sync models with database
     try {
-      await sequelize.sync({ alter: true });
+      await sequelize.sync();
       console.log('Database models synced');
     } catch (syncError) {
       console.warn('Database sync warning (non-fatal):', syncError.message);
@@ -222,6 +268,15 @@ const connectDB = async () => {
     void ScenarioInertiaConfiguration;
     void ScenarioIntensityConfiguration;
     void MonteCarloGlobalProperty;
+    void Factor;
+    void FactorScenarioStatistic;
+    void FactorCorrelation;
+    void InvestmentIndex;
+    void EtfFactorExposure;
+    void EtfSpecificRisk;
+    void EtfModelFit;
+    void MarketUniverseRunV2;
+    void MarketUniverseEtfV2;
 
     return sequelize;
   } catch (error) {
