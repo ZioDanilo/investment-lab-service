@@ -7,8 +7,9 @@ const { fetchEodhdQuotation } = require('../utils/eodhdProvider');
 
 // Helper function to get today's date in YYYY-MM-DD format
 const getTodayDateString = () => {
-  const today = new Date();
-  return today.toISOString().split('T')[0];
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).format(new Date());
 };
 
 const getLatestStoredQuotation = async (isin) => {
