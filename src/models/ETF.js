@@ -27,6 +27,11 @@ const ETF = sequelize.define('ETF', {
   ticker: {
     type: DataTypes.STRING
   },
+  indexId: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    comment: 'Underlying index reference used by Factor Engine V2'
+  },
   description: {
     type: DataTypes.TEXT,
     allowNull: false
