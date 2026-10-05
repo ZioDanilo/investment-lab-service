@@ -17,8 +17,6 @@ const toApi = (portfolio) => {
     tipo: p.tipo,
     createdAt: p.dataCreazione,
     updatedAt: p.dataModifica,
-    virtualCash: Number(p.virtualCash ?? 0),
-    contributedCapital: Number(p.contributedCapital ?? 0)
   };
 };
 
@@ -192,9 +190,8 @@ exports.createOperation = async (req, res, next) => {
       position = await RealPortfolioEtf.create({ realPortfolioId: portfolio.id, etfId, quantity: nextQuantity }, { transaction });
     }
 
-    // Rebuild tax withholdings, virtual cash and contributed capital from the
-    // complete chronological trade history. Historical inserts are therefore
-    // handled exactly like operations that had been entered in date order.
+    // Rebuild tax withholdings from the complete chronological trade history.
+    // Historical inserts are therefore handled exactly like operations entered in date order.
     await RealPortfolioOperation.destroy({
       where: { userId: req.user.id, realPortfolioId: portfolio.id, operationType: 'tax' },
       transaction
@@ -214,8 +211,6 @@ exports.createOperation = async (req, res, next) => {
     const TAX_RATE = 0.26;
     const fiscalPositions = new Map();
     const taxRows = [];
-    let nextVirtualCash = 0;
-    let nextContributedCapital = 0;
 
     for (const historicalOperation of chronologicalOperations) {
       const historicalQuantity = Number(historicalOperation.quantity);
@@ -224,9 +219,6 @@ exports.createOperation = async (req, res, next) => {
       const fiscal = fiscalPositions.get(String(historicalOperation.etfId)) || { quantity: 0, cost: 0 };
 
       if (historicalOperation.operationType === 'buy') {
-        const cashUsed = Math.min(nextVirtualCash, historicalValue);
-        nextVirtualCash -= cashUsed;
-        nextContributedCapital += historicalValue - cashUsed;
         fiscal.quantity += historicalQuantity;
         fiscal.cost += historicalValue;
       } else {
@@ -234,7 +226,6 @@ exports.createOperation = async (req, res, next) => {
         const realizedGain = (historicalUnitPrice - averageCost) * historicalQuantity;
         const withholding = realizedGain > 0 ? Math.round(realizedGain * TAX_RATE * 100) / 100 : 0;
 
-        nextVirtualCash += historicalValue - withholding;
         fiscal.quantity -= historicalQuantity;
         fiscal.cost -= averageCost * historicalQuantity;
         if (Math.abs(fiscal.quantity) < 1e-8) {
@@ -260,11 +251,7 @@ exports.createOperation = async (req, res, next) => {
 
     if (taxRows.length) await RealPortfolioOperation.bulkCreate(taxRows, { transaction });
 
-    await portfolio.update({
-      virtualCash: nextVirtualCash,
-      contributedCapital: nextContributedCapital,
-      dataModifica: new Date()
-    }, { transaction });
+    await portfolio.update({ dataModifica: new Date() }, { transaction });
 
     await transaction.commit();
     res.status(201).json({
@@ -273,15 +260,40 @@ exports.createOperation = async (req, res, next) => {
         id: operation.id, portfolioId: operation.realPortfolioId, operationType: operation.operationType,
         etf: { id: etf.id, isin: etf.isin, ticker: etf.ticker, name: etf.name, nickname: etf.nickname },
         operationDate: operation.operationDate, quantity: operation.quantity, unitPrice: operation.unitPrice,
-        portfolioQuantity: nextQuantity,
-        virtualCash: nextVirtualCash,
-        contributedCapital: nextContributedCapital
+        portfolioQuantity: nextQuantity
       }
     });
   } catch (error) {
     if (!transaction.finished) await transaction.rollback();
     next(error);
   }
+};
+
+const buildCurrentCostBasis = async (portfolioId) => {
+  const operations = await RealPortfolioOperation.findAll({
+    where: { realPortfolioId: portfolioId, operationType: { [Op.in]: ['buy', 'sell'] } },
+    attributes: ['operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt', 'id'],
+    order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
+    raw: true
+  });
+  const basis = new Map();
+  for (const operation of operations) {
+    const key = String(operation.etfId);
+    const quantity = Number(operation.quantity);
+    const value = quantity * Number(operation.unitPrice);
+    const current = basis.get(key) || { quantity: 0, cost: 0 };
+    if (operation.operationType === 'buy') {
+      current.quantity += quantity;
+      current.cost += value;
+    } else {
+      const averageCost = current.quantity > 0 ? current.cost / current.quantity : 0;
+      current.quantity -= quantity;
+      current.cost -= averageCost * quantity;
+      if (Math.abs(current.quantity) < 1e-8) { current.quantity = 0; current.cost = 0; }
+    }
+    basis.set(key, current);
+  }
+  return basis;
 };
 
 exports.getHoldings = async (req, res, next) => {
@@ -296,13 +308,35 @@ exports.getHoldings = async (req, res, next) => {
       include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname'] }],
       order: [['etfId', 'ASC']]
     });
-    res.status(200).json({ success: true, data: holdings.map((row) => ({
-      id: row.etf.id, isin: row.etf.isin, ticker: row.etf.ticker, name: row.etf.name,
-      nickname: row.etf.nickname, quantity: row.quantity
-    })) });
+    const basis = await buildCurrentCostBasis(portfolio.id);
+    const isins = holdings.map(row => row.etf?.isin).filter(Boolean);
+    const quotations = isins.length ? await EtfQuotation.findAll({
+      where: { isin: { [Op.in]: isins }, quotation: { [Op.ne]: null } },
+      attributes: ['isin', 'quotation', 'date'],
+      order: [['isin', 'ASC'], ['date', 'DESC']],
+      raw: true
+    }) : [];
+    const latestByIsin = new Map();
+    for (const quote of quotations) if (!latestByIsin.has(quote.isin)) latestByIsin.set(quote.isin, quote);
+
+    res.status(200).json({ success: true, data: holdings.map((row) => {
+      const quantity = Number(row.quantity);
+      const cost = basis.get(String(row.etf.id))?.cost ?? 0;
+      const averageCost = quantity > 0 ? cost / quantity : 0;
+      const quote = latestByIsin.get(row.etf.isin);
+      const currentPrice = quote ? Number(quote.quotation) : null;
+      const marketValue = currentPrice == null ? null : quantity * currentPrice;
+      const gainLoss = marketValue == null ? null : marketValue - cost;
+      return {
+        id: row.etf.id, isin: row.etf.isin, ticker: row.etf.ticker, name: row.etf.name,
+        nickname: row.etf.nickname, quantity, averageCost, investedCapital: cost,
+        currentPrice, marketValue, gainLoss,
+        gainLossPercent: cost > 0 && gainLoss != null ? gainLoss / cost * 100 : null,
+        quotationDate: quote ? String(quote.date) : null
+      };
+    }) });
   } catch (error) { next(error); }
 };
-
 
 exports.getOperations = async (req, res, next) => {
   try {
@@ -356,13 +390,11 @@ const buildMarketValueSummary = async (portfolio) => {
     include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin'] }]
   });
   if (!positions.length) {
-    const contributedCapital = Number(portfolio.contributedCapital ?? 0);
-    const virtualCash = Number(portfolio.virtualCash ?? 0);
-    const totalValue = virtualCash;
-    const gainLoss = totalValue - contributedCapital;
-    return { portfolioId: portfolio.id, marketValue: 0, virtualCash, totalValue, contributedCapital, gainLoss, gainLossPercent: contributedCapital > 0 ? gainLoss / contributedCapital * 100 : 0, quotationDate: null };
+    return { portfolioId: portfolio.id, marketValue: 0, investedCapital: 0, gainLoss: 0, gainLossPercent: 0, quotationDate: null };
   }
 
+  const basis = await buildCurrentCostBasis(portfolio.id);
+  const investedCapital = positions.reduce((sum, position) => sum + Number(basis.get(String(position.etf.id))?.cost ?? 0), 0);
   const isins = positions.map((row) => row.etf?.isin).filter(Boolean);
   const quotations = await EtfQuotation.findAll({
     where: { isin: { [Op.in]: isins }, quotation: { [Op.ne]: null } },
@@ -381,13 +413,10 @@ const buildMarketValueSummary = async (portfolio) => {
     marketValue += Number(position.quantity) * Number(quote.quotation);
     usedDates.push(String(quote.date));
   }
-  const virtualCash = Number(portfolio.virtualCash ?? 0);
-  const contributedCapital = Number(portfolio.contributedCapital ?? 0);
-  const totalValue = marketValue + virtualCash;
-  const gainLoss = totalValue - contributedCapital;
+  const gainLoss = marketValue - investedCapital;
   return {
-    portfolioId: portfolio.id, marketValue, virtualCash, totalValue, contributedCapital, gainLoss,
-    gainLossPercent: contributedCapital > 0 ? gainLoss / contributedCapital * 100 : 0,
+    portfolioId: portfolio.id, marketValue, investedCapital, gainLoss,
+    gainLossPercent: investedCapital > 0 ? gainLoss / investedCapital * 100 : 0,
     quotationDate: usedDates.length === positions.length ? usedDates.sort()[0] : null
   };
 };
