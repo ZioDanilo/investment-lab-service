@@ -238,6 +238,16 @@ const connectDB = async () => {
       console.warn('Unified portfolio migration warning:', migrationError.message);
     }
 
+    // Real portfolio tax operations: keep the existing Sequelize ENUM in sync and
+    // allow withholding rows that are not tied to an ETF.
+    try {
+      await sequelize.query(`ALTER TYPE enum_real_portfolio_operations_operation_type ADD VALUE IF NOT EXISTS 'tax';`);
+      await sequelize.query(`ALTER TABLE real_portfolio_operations ALTER COLUMN etf_id DROP NOT NULL;`);
+      console.log('Real portfolio tax migration applied');
+    } catch (taxMigrationError) {
+      console.warn('Real portfolio tax migration warning:', taxMigrationError.message);
+    }
+
     // Factor Engine V2 models must be explicitly loaded before sequelize.sync().
     // Requiring them only inside initializeAssociations is not sufficient because
     // that function is intentionally idempotent and the V2 schema must always be
