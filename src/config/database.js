@@ -238,6 +238,16 @@ const connectDB = async () => {
       console.warn('Unified portfolio migration warning:', migrationError.message);
     }
 
+    // Obsolete accounting fields: portfolio value and invested capital are now
+    // derived exclusively from current ETF positions, trade cost basis and quotations.
+    try {
+      await sequelize.query(`ALTER TABLE portafogli DROP COLUMN IF EXISTS virtual_cash;`);
+      await sequelize.query(`ALTER TABLE portafogli DROP COLUMN IF EXISTS contributed_capital;`);
+      console.log('Removed obsolete real portfolio accounting columns');
+    } catch (accountingMigrationError) {
+      console.warn('Real portfolio accounting cleanup warning:', accountingMigrationError.message);
+    }
+
     // Real portfolio tax operations: keep the existing Sequelize ENUM in sync and
     // allow withholding rows that are not tied to an ETF.
     try {
