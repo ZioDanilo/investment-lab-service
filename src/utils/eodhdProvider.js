@@ -61,16 +61,30 @@ const resolveEodhdListing = async (etf) => {
 const fetchEodhdQuotation = async (etf) => {
   const listing = await resolveEodhdListing(etf);
   const symbol = `${listing.code}.${listing.exchange}`;
-  const { data } = await axios.get(`${BASE_URL}/real-time/${encodeURIComponent(symbol)}`, {
-    params: { api_token: getApiKey(), fmt: 'json' },
+  const endDate = new Date();
+  const startDate = new Date(endDate);
+  startDate.setUTCDate(startDate.getUTCDate() - 10);
+  const ymd = (d) => d.toISOString().slice(0, 10);
+
+  const { data } = await axios.get(`${BASE_URL}/eod/${encodeURIComponent(symbol)}`, {
+    params: {
+      api_token: getApiKey(),
+      fmt: 'json',
+      from: ymd(startDate),
+      to: ymd(endDate),
+      period: 'd',
+      order: 'd'
+    },
     timeout: 10000
   });
 
-  const price = Number(data?.close);
+  const rows = Array.isArray(data) ? data : [];
+  const latest = rows.length ? rows[rows.length - 1] : null;
+  const price = Number(latest?.close);
   if (!Number.isFinite(price) || price <= 0) {
-    throw new Error(`EODHD returned no valid close for ${symbol}`);
+    throw new Error(`EODHD returned no valid EOD close for ${symbol}`);
   }
-  return { price, symbol, currency: listing.currency, timestamp: data?.timestamp || null };
+  return { price, symbol, currency: listing.currency, timestamp: null, quotationDate: latest?.date || null };
 };
 
 module.exports = { fetchEodhdQuotation, resolveEodhdListing };
