@@ -347,7 +347,7 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
 
     const isins = etfs.map((etf) => etf.isin);
     const todayRows = await EtfQuotation.findAll({
-      where: { date: today, isin: { [Op.in]: isins } },
+      where: { date: today, isin: { [Op.in]: isins }, source: 'eodhd_eod' },
       attributes: ['isin', 'quotation', 'date'],
       raw: true
     });
