@@ -22,6 +22,11 @@ const EtfQuotation = sequelize.define('EtfQuotation', {
     type: DataTypes.DATEONLY,
     allowNull: false,
     comment: 'Date of the quotation (YYYY-MM-DD)'
+  },
+  source: {
+    type: DataTypes.STRING(32),
+    allowNull: true,
+    comment: 'Quotation source (eodhd, excel, legacy, etc.)'
   }
 }, {
   timestamps: true,
