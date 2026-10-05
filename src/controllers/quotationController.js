@@ -3,7 +3,7 @@ const EtfQuotation = require('../models/EtfQuotation');
 const Portafoglio = require('../models/Portafoglio');
 const RealPortfolioEtf = require('../models/RealPortfolioEtf');
 const { sequelize, Op } = require('../config/database');
-const { fetchJustEtfQuotation } = require('../utils/justetfScraper');
+const { fetchEodhdQuotation } = require('../utils/eodhdProvider');
 
 // Helper function to get today's date in YYYY-MM-DD format
 const getTodayDateString = () => {
@@ -42,90 +42,50 @@ const isPlausibleQuotation = (quotation, previousQuotation) => {
   return ratio >= 0.5 && ratio <= 1.5;
 };
 
-// Get quotation from JustETF ONLY - NO FALLBACK
-const getQuotationFromJustETF = async (ticker, isin) => {
-  if (!isin) {
-    console.log(`No ISIN provided for ticker ${ticker}`);
-    return null;
-  }
-
-  const price = await fetchJustEtfQuotation(isin);
-  
-  if (price !== null) {
-    const lastStoredQuotation = await getLatestStoredQuotation(isin);
+// Fetch one delayed live quotation from EODHD. The ISIN -> provider symbol mapping
+// is resolved once and persisted on anagrafica_etf; subsequent days cost one provider
+// call per ETF at most. Stored quotations are validated against the previous value.
+const getQuotationFromEODHD = async (etf) => {
+  if (!etf?.isin) return null;
+  try {
+    const { price, symbol, currency } = await fetchEodhdQuotation(etf);
+    const lastStoredQuotation = await getLatestStoredQuotation(etf.isin);
     if (lastStoredQuotation && !isPlausibleQuotation(price, lastStoredQuotation.quotation)) {
-      console.warn(
-        `✗ Rejected suspicious JustETF price for ${ticker} (${isin}): €${price} vs last valid €${lastStoredQuotation.quotation} on ${lastStoredQuotation.date}`
-      );
+      console.warn(`✗ Rejected suspicious EODHD price for ${etf.ticker} (${etf.isin}): ${price} vs last valid ${lastStoredQuotation.quotation} on ${lastStoredQuotation.date}`);
       return null;
     }
-
-    console.log(`✓ Using JustETF price for ${ticker} (${isin}): €${price}`);
+    console.log(`✓ Using EODHD price for ${etf.ticker} (${etf.isin}) [${symbol}, ${currency || 'currency n/a'}]: ${price}`);
     return price;
+  } catch (error) {
+    console.warn(`✗ EODHD failed for ${etf.ticker} (${etf.isin}): ${error.response?.status || ''} ${error.message}`.trim());
+    return null;
   }
-
-  // NO FALLBACK - if JustETF fails, return null (will show as ND)
-  console.log(`✗ JustETF failed for ${ticker} - will display ND`);
-  return null;
 };
 
-// Get quotations from JustETF ONLY - NO FALLBACK CHAIN
-// Returns price or null (which will display as "ND")
+// Daily cache is per ETF, not global: an ETF already stored today never calls EODHD again.
 exports.getDailyQuotations = async (req, res, next) => {
   try {
     const today = getTodayDateString();
-    
-    // Check if quotations for today already exist
-    const existingQuotations = await EtfQuotation.findAll({
-      where: { date: today },
-      attributes: ['isin', 'quotation', 'createdAt']
-    });
-
-    if (existingQuotations.length > 0) {
-      // Quotations already exist for today - fetch them with variation
-      return await fetchQuotationsWithVariation(res, today);
-    }
-
-    // Quotations don't exist for today - fetch from JustETF ONLY
     const allEtfs = await ETF.findAll({
-      attributes: ['id', 'isin', 'name', 'ticker']
+      attributes: ['id', 'isin', 'name', 'ticker', 'eodhdCode', 'eodhdExchange', 'eodhdCurrency']
     });
+    if (!allEtfs.length) return res.status(200).json({ success: true, data: [], message: 'No ETFs found in database' });
 
-    if (allEtfs.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        message: 'No ETFs found in database'
-      });
-    }
+    const todayRows = await EtfQuotation.findAll({
+      where: { date: today, quotation: { [Op.ne]: null } },
+      attributes: ['isin'], raw: true
+    });
+    const cached = new Set(todayRows.map((row) => row.isin));
 
-    console.log(`\n📊 Fetching quotations from JustETF for ${allEtfs.length} ETFs...`);
-    
-    // Fetch quotations from JustETF ONLY — only save if value is not null
     for (const etf of allEtfs) {
-      console.log(`  → ${etf.name} (${etf.ticker})`);
-      const quotation = await getQuotationFromJustETF(etf.ticker, etf.isin);
-      
-      // Only save to DB if we actually got a value (avoid overwriting history with null)
+      if (cached.has(etf.isin)) continue;
+      const quotation = await getQuotationFromEODHD(etf);
       if (quotation !== null) {
-        await EtfQuotation.upsert({
-          isin: etf.isin,
-          quotation,
-          date: today
-        }, { conflictFields: ['isin', 'date'] });
-        console.log(`    ✓ €${quotation}`);
-      } else {
-        console.log(`    ✗ ND (kept last known)`);
+        await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today }, { conflictFields: ['isin', 'date'] });
       }
     }
-
-    console.log(`✓ JustETF fetch complete\n`);
-    
-    // Fetch and return with variation
     return await fetchQuotationsWithVariation(res, today);
-  } catch (error) {
-    next(error);
-  }
+  } catch (error) { next(error); }
 };
 
 // Helper to fetch quotations with variation calculation
@@ -269,63 +229,11 @@ exports.deleteTodayQuotations = async (req, res, next) => {
   }
 };
 
-// Force refresh - Update ALL ETFs from JustETF, overwrite DB, show results
+// Force refresh - Update ALL ETFs from EODHD, overwrite DB, show results
 exports.forceRefreshQuotations = async (req, res, next) => {
-  try {
-    const today = getTodayDateString();
-    
-    console.log(`\n🔄 FORCE REFRESH STARTED for date ${today}`);
-    
-    // Step 1: Delete today's quotations
-    await EtfQuotation.destroy({
-      where: { date: today }
-    });
-    console.log(`✓ Cleared old quotations for ${today}`);
-    
-    // Step 2: Get all ETFs
-    const allEtfs = await ETF.findAll({
-      attributes: ['id', 'isin', 'name', 'ticker']
-    });
-
-    if (allEtfs.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        message: 'No ETFs found in database'
-      });
-    }
-
-    console.log(`📊 Found ${allEtfs.length} ETFs to refresh from JustETF`);
-    
-    // Step 3: Fetch quotations ONLY from JustETF for all ETFs
-    const newQuotations = [];
-    
-    for (const etf of allEtfs) {
-      console.log(`   → Fetching ${etf.ticker} (${etf.isin}): ${etf.name}`);
-      
-      // Force JustETF fetch ONLY
-      const quotation = await getQuotationFromJustETF(etf.ticker, etf.isin);
-      
-      // Save to DB (null is allowed - means no data found)
-      const quote = await EtfQuotation.create({
-        isin: etf.isin,
-        quotation: quotation, // Can be null
-        date: today
-      });
-      
-      const status = quotation !== null ? `✓ €${quotation}` : '✗ ND';
-      console.log(`     ${status}`);
-      
-      newQuotations.push(quote);
-    }
-
-    console.log(`✓ FORCE REFRESH COMPLETED - ${newQuotations.length} ETFs updated\n`);
-    
-    // Step 4: Return updated quotations with variation
-    return await fetchQuotationsWithVariation(res, today);
-  } catch (error) {
-    next(error);
-  }
+  // Kept for API compatibility. Under the free EODHD plan a "force" refresh must
+  // still honor the once-per-ETF/day cache, so delegate to the normal daily flow.
+  return exports.getDailyQuotations(req, res, next);
 };
 
 // Single ETF refresh - Update quotation for ONE ETF only
@@ -345,7 +253,7 @@ exports.refreshSingleQuotation = async (req, res, next) => {
     // Get ETF details
     const etf = await ETF.findOne({
       where: { isin },
-      attributes: ['id', 'isin', 'name', 'ticker']
+      attributes: ['id', 'isin', 'name', 'ticker', 'eodhdCode', 'eodhdExchange', 'eodhdCurrency']
     });
 
     if (!etf) {
@@ -355,10 +263,23 @@ exports.refreshSingleQuotation = async (req, res, next) => {
       });
     }
 
+    const cachedToday = await EtfQuotation.findOne({
+      where: { isin, date: today, quotation: { [Op.ne]: null } },
+      attributes: ['quotation', 'date'], raw: true
+    });
+    if (cachedToday) {
+      return res.status(200).json({
+        success: true,
+        data: { isin: etf.isin, name: etf.name, quotation: Number(cachedToday.quotation), variation: '-' },
+        date: today,
+        cached: true
+      });
+    }
+
     console.log(`\n🔄 Refreshing single quotation for ${etf.ticker} (${isin})`);
 
-    // Fetch from JustETF
-    const quotation = await getQuotationFromJustETF(etf.ticker, etf.isin);
+    // Fetch from EODHD
+    const quotation = await getQuotationFromEODHD(etf);
 
     // Upsert quotation (update if exists, create if not)
     await EtfQuotation.upsert({
@@ -408,7 +329,7 @@ exports.refreshSingleQuotation = async (req, res, next) => {
 
 
 // Refresh only ETFs currently held by one real portfolio.
-// Today's stored quotation wins: JustETF is called at most once per ETF/day.
+// Today's stored quotation wins: EODHD is called at most once per ETF/day.
 exports.refreshRealPortfolioQuotations = async (req, res, next) => {
   try {
     const today = getTodayDateString();
@@ -419,7 +340,7 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
 
     const positions = await RealPortfolioEtf.findAll({
       where: { realPortfolioId: portfolio.id },
-      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'name', 'ticker', 'nickname'] }]
+      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'name', 'ticker', 'nickname', 'eodhdCode', 'eodhdExchange', 'eodhdCurrency'] }]
     });
     const etfs = positions.map((row) => row.etf).filter(Boolean);
     if (!etfs.length) return res.status(200).json({ success: true, data: [], date: today });
@@ -434,7 +355,7 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
 
     for (const etf of etfs) {
       if (todayMap.has(etf.isin)) continue;
-      const quotation = await getQuotationFromJustETF(etf.ticker, etf.isin);
+      const quotation = await getQuotationFromEODHD(etf);
       if (quotation !== null) {
         await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today }, { conflictFields: ['isin', 'date'] });
         todayMap.set(etf.isin, { isin: etf.isin, quotation, date: today });
