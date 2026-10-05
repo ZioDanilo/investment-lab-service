@@ -248,6 +248,17 @@ const connectDB = async () => {
       console.warn('Real portfolio accounting cleanup warning:', accountingMigrationError.message);
     }
 
+    // Persist the EODHD symbol resolved once from the ISIN. This avoids spending
+    // one Search API call on every daily quotation refresh.
+    try {
+      await sequelize.query(`ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS eodhd_code VARCHAR(255);`);
+      await sequelize.query(`ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS eodhd_exchange VARCHAR(255);`);
+      await sequelize.query(`ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS eodhd_currency VARCHAR(8);`);
+      console.log('EODHD ETF mapping migration applied');
+    } catch (eodhdMigrationError) {
+      console.warn('EODHD ETF mapping migration warning:', eodhdMigrationError.message);
+    }
+
     // Real portfolio tax operations: keep the existing Sequelize ENUM in sync and
     // allow withholding rows that are not tied to an ETF.
     try {
