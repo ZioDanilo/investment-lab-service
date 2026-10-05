@@ -73,7 +73,7 @@ exports.getDailyQuotations = async (req, res, next) => {
     if (!allEtfs.length) return res.status(200).json({ success: true, data: [], message: 'No ETFs found in database' });
 
     const todayRows = await EtfQuotation.findAll({
-      where: { date: today },
+      where: { date: today, source: 'eodhd' },
       attributes: ['isin'], raw: true
     });
     const cached = new Set(todayRows.map((row) => row.isin));
@@ -81,7 +81,7 @@ exports.getDailyQuotations = async (req, res, next) => {
     for (const etf of allEtfs) {
       if (cached.has(etf.isin)) continue;
       const quotation = await getQuotationFromEODHD(etf);
-      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today }, { conflictFields: ['isin', 'date'] });
+      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today, source: 'eodhd' }, { conflictFields: ['isin', 'date'] });
     }
     return await fetchQuotationsWithVariation(res, today);
   } catch (error) { next(error); }
@@ -113,7 +113,7 @@ const fetchQuotationsWithVariation = async (res, today) => {
 
     // Get today's quotations (may be null or absent for some ETFs)
     const todayQuots = await EtfQuotation.findAll({
-      where: { date: today, isin: { [Op.in]: isins } },
+      where: { date: today, isin: { [Op.in]: isins }, source: 'eodhd' },
       attributes: ['isin', 'quotation', 'date'],
       raw: true
     });
@@ -263,7 +263,7 @@ exports.refreshSingleQuotation = async (req, res, next) => {
     }
 
     const cachedToday = await EtfQuotation.findOne({
-      where: { isin, date: today },
+      where: { isin, date: today, source: 'eodhd' },
       attributes: ['quotation', 'date'], raw: true
     });
     if (cachedToday) {
@@ -284,7 +284,8 @@ exports.refreshSingleQuotation = async (req, res, next) => {
     await EtfQuotation.upsert({
       isin: etf.isin,
       date: today,
-      quotation: quotation
+      quotation: quotation,
+      source: 'eodhd'
     }, {
       conflictFields: ['isin', 'date']
     });
@@ -355,7 +356,7 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
     for (const etf of etfs) {
       if (todayMap.has(etf.isin)) continue;
       const quotation = await getQuotationFromEODHD(etf);
-      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today }, { conflictFields: ['isin', 'date'] });
+      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today, source: 'eodhd' }, { conflictFields: ['isin', 'date'] });
       todayMap.set(etf.isin, { isin: etf.isin, quotation, date: today });
     }
 
