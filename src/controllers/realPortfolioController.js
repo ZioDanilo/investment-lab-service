@@ -192,30 +192,73 @@ exports.createOperation = async (req, res, next) => {
       position = await RealPortfolioEtf.create({ realPortfolioId: portfolio.id, etfId, quantity: nextQuantity }, { transaction });
     }
 
-    // Rebuild derived cash/capital from the complete chronological history.
-    // This keeps the portfolio correct even when historical operations are inserted later.
+    // Rebuild tax withholdings, virtual cash and contributed capital from the
+    // complete chronological trade history. Historical inserts are therefore
+    // handled exactly like operations that had been entered in date order.
+    await RealPortfolioOperation.destroy({
+      where: { userId: req.user.id, realPortfolioId: portfolio.id, operationType: 'tax' },
+      transaction
+    });
+
     const chronologicalOperations = await RealPortfolioOperation.findAll({
-      where: { userId: req.user.id, realPortfolioId: portfolio.id },
-      attributes: ['operationType', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
+      where: {
+        userId: req.user.id,
+        realPortfolioId: portfolio.id,
+        operationType: { [Op.in]: ['buy', 'sell'] }
+      },
+      attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
       order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
       transaction
     });
 
+    const TAX_RATE = 0.26;
+    const fiscalPositions = new Map();
+    const taxRows = [];
     let nextVirtualCash = 0;
     let nextContributedCapital = 0;
 
     for (const historicalOperation of chronologicalOperations) {
-      const historicalValue =
-        Number(historicalOperation.quantity) * Number(historicalOperation.unitPrice);
+      const historicalQuantity = Number(historicalOperation.quantity);
+      const historicalUnitPrice = Number(historicalOperation.unitPrice);
+      const historicalValue = historicalQuantity * historicalUnitPrice;
+      const fiscal = fiscalPositions.get(String(historicalOperation.etfId)) || { quantity: 0, cost: 0 };
 
-      if (historicalOperation.operationType === 'sell') {
-        nextVirtualCash += historicalValue;
-      } else {
+      if (historicalOperation.operationType === 'buy') {
         const cashUsed = Math.min(nextVirtualCash, historicalValue);
         nextVirtualCash -= cashUsed;
         nextContributedCapital += historicalValue - cashUsed;
+        fiscal.quantity += historicalQuantity;
+        fiscal.cost += historicalValue;
+      } else {
+        const averageCost = fiscal.quantity > 0 ? fiscal.cost / fiscal.quantity : 0;
+        const realizedGain = (historicalUnitPrice - averageCost) * historicalQuantity;
+        const withholding = realizedGain > 0 ? Math.round(realizedGain * TAX_RATE * 100) / 100 : 0;
+
+        nextVirtualCash += historicalValue - withholding;
+        fiscal.quantity -= historicalQuantity;
+        fiscal.cost -= averageCost * historicalQuantity;
+        if (Math.abs(fiscal.quantity) < 1e-8) {
+          fiscal.quantity = 0;
+          fiscal.cost = 0;
+        }
+
+        if (withholding > 0) {
+          taxRows.push({
+            userId: req.user.id,
+            realPortfolioId: portfolio.id,
+            operationType: 'tax',
+            etfId: null,
+            operationDate: historicalOperation.operationDate,
+            quantity: 1,
+            unitPrice: withholding
+          });
+        }
       }
+
+      fiscalPositions.set(String(historicalOperation.etfId), fiscal);
     }
+
+    if (taxRows.length) await RealPortfolioOperation.bulkCreate(taxRows, { transaction });
 
     await portfolio.update({
       virtualCash: nextVirtualCash,
@@ -273,7 +316,7 @@ exports.getOperations = async (req, res, next) => {
     res.status(200).json({ success: true, data: operations.map((o) => ({
       id: o.id, operationType: o.operationType, operationDate: o.operationDate,
       quantity: o.quantity, unitPrice: o.unitPrice,
-      total: Number(o.quantity) * Number(o.unitPrice),
+      total: o.operationType === 'tax' ? -Number(o.unitPrice) : Number(o.quantity) * Number(o.unitPrice),
       etf: o.etf
     })) });
   } catch (error) { next(error); }
@@ -300,7 +343,7 @@ exports.getLatestOperations = async (req, res, next) => {
       operationDate: o.operationDate,
       quantity: o.quantity,
       unitPrice: o.unitPrice,
-      total: Number(o.quantity) * Number(o.unitPrice),
+      total: o.operationType === 'tax' ? -Number(o.unitPrice) : Number(o.quantity) * Number(o.unitPrice),
       etf: o.etf
     })) });
   } catch (error) { next(error); }
