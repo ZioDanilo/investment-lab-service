@@ -254,6 +254,7 @@ const connectDB = async () => {
       await sequelize.query(`ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS eodhd_code VARCHAR(255);`);
       await sequelize.query(`ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS eodhd_exchange VARCHAR(255);`);
       await sequelize.query(`ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS eodhd_currency VARCHAR(8);`);
+      await sequelize.query(`ALTER TABLE etf_quotations ADD COLUMN IF NOT EXISTS source VARCHAR(32);`);
       console.log('EODHD ETF mapping migration applied');
     } catch (eodhdMigrationError) {
       console.warn('EODHD ETF mapping migration warning:', eodhdMigrationError.message);
