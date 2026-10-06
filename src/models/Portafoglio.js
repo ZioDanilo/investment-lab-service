@@ -20,8 +20,6 @@ const Portafoglio = sequelize.define('Portafoglio', {
   },
   tipo: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'laboratorio' },
   status: { type: DataTypes.STRING(32), allowNull: false, defaultValue: 'open' },
-  virtualCash: { type: DataTypes.DECIMAL(24, 8), allowNull: false, defaultValue: 0, field: 'virtual_cash' },
-  contributedCapital: { type: DataTypes.DECIMAL(24, 8), allowNull: false, defaultValue: 0, field: 'contributed_capital' },
   dataCreazione: {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW
