@@ -27,11 +27,20 @@ const chooseListing = (rows, isin) => {
 };
 
 const resolveEodhdListing = async (etf) => {
-  if (etf.eodhdCode && etf.eodhdExchange) {
+  // Prefer the EODHD mapping already persisted in anagrafica_etf.
+  // Sequelize instances can expose selected attributes more reliably through
+  // get()/dataValues than through direct property access, so normalize them
+  // before deciding whether the Search API is necessary.
+  const read = (field) => typeof etf?.get === 'function' ? etf.get(field) : etf?.[field];
+  const persistedCode = read('eodhdCode');
+  const persistedExchange = read('eodhdExchange');
+  const persistedCurrency = read('eodhdCurrency');
+
+  if (persistedCode && persistedExchange) {
     return {
-      code: etf.eodhdCode,
-      exchange: etf.eodhdExchange,
-      currency: etf.eodhdCurrency || null
+      code: String(persistedCode),
+      exchange: String(persistedExchange),
+      currency: persistedCurrency ? String(persistedCurrency).toUpperCase() : null
     };
   }
 
