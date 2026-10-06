@@ -354,9 +354,17 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
     const todayMap = new Map(todayRows.map((row) => [row.isin, row]));
 
     for (const etf of etfs) {
-      if (todayMap.has(etf.isin)) continue;
+      const cachedToday = todayMap.get(etf.isin);
+      // Only a valid EODHD quotation counts as today's cache hit.
+      // A NULL row can be left behind by a failed/configuration attempt and
+      // must not prevent a later retry once the provider is available again.
+      if (cachedToday?.quotation != null && Number.isFinite(Number(cachedToday.quotation))) continue;
+
       const quotation = await getQuotationFromEODHD(etf);
-      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today, source: 'eodhd_eod' }, { conflictFields: ['isin', 'date'] });
+      await EtfQuotation.upsert(
+        { isin: etf.isin, quotation, date: today, source: 'eodhd_eod' },
+        { conflictFields: ['isin', 'date'] }
+      );
       todayMap.set(etf.isin, { isin: etf.isin, quotation, date: today });
     }
 
