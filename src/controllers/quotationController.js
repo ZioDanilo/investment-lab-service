@@ -49,14 +49,18 @@ const isPlausibleQuotation = (quotation, previousQuotation) => {
 const getQuotationFromEODHD = async (etf) => {
   if (!etf?.isin) return null;
   try {
-    const { price, symbol, currency } = await fetchEodhdQuotation(etf);
+    const { price, symbol, currency, quotationDate } = await fetchEodhdQuotation(etf);
     const lastStoredQuotation = await getLatestStoredQuotation(etf.isin);
     if (lastStoredQuotation && !isPlausibleQuotation(price, lastStoredQuotation.quotation)) {
       console.warn(`✗ Rejected suspicious EODHD price for ${etf.ticker} (${etf.isin}): ${price} vs last valid ${lastStoredQuotation.quotation} on ${lastStoredQuotation.date}`);
       return null;
     }
-    console.log(`✓ Using EODHD price for ${etf.ticker} (${etf.isin}) [${symbol}, ${currency || 'currency n/a'}]: ${price}`);
-    return price;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(quotationDate || ''))) {
+      console.warn(`✗ Missing EODHD market date for ${etf.isin}; skipping persistence`);
+      return null;
+    }
+    console.log(`✓ EODHD ${etf.isin} [${symbol}, ${currency || 'n/a'}]: ${price} marketDate=${quotationDate}`);
+    return { price, quotationDate };
   } catch (error) {
     console.warn(`✗ EODHD failed for ${etf.ticker} (${etf.isin}): ${error.response?.status || ''} ${error.message}`.trim());
     return null;
@@ -80,9 +84,9 @@ exports.getDailyQuotations = async (req, res, next) => {
 
     for (const etf of allEtfs) {
       if (cached.has(etf.isin)) continue;
-      const quotation = await getQuotationFromEODHD(etf);
-      if (quotation == null) continue;
-      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today, source: 'eodhd_eod' }, { conflictFields: ['isin', 'date'] });
+      const quote = await getQuotationFromEODHD(etf);
+      if (quote == null) continue;
+      await EtfQuotation.upsert({ isin: etf.isin, quotation: quote.price, date: quote.quotationDate, source: 'eodhd_eod' }, { conflictFields: ['isin', 'date'] });
     }
     return await fetchQuotationsWithVariation(res, today);
   } catch (error) { next(error); }
@@ -279,13 +283,14 @@ exports.refreshSingleQuotation = async (req, res, next) => {
     console.log(`\n🔄 Refreshing single quotation for ${etf.ticker} (${isin})`);
 
     // Fetch from EODHD
-    const quotation = await getQuotationFromEODHD(etf);
+    const quote = await getQuotationFromEODHD(etf);
+    const quotation = quote?.price ?? null;
 
     // Never persist a failed provider response. A NULL quotation is not a cache entry.
     if (quotation != null) {
       await EtfQuotation.upsert({
         isin: etf.isin,
-        date: today,
+        date: quote.quotationDate,
         quotation,
         source: 'eodhd_eod'
       }, {
@@ -363,18 +368,18 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
       // must not prevent a later retry once the provider is available again.
       if (cachedToday?.quotation != null && Number.isFinite(Number(cachedToday.quotation))) continue;
 
-      const quotation = await getQuotationFromEODHD(etf);
-      if (quotation == null) {
+      const quote = await getQuotationFromEODHD(etf);
+      if (quote == null) {
         // Failed requests must not create/overwrite quotation rows. Keep the
         // previous stored value available to the portfolio and allow a retry.
         todayMap.delete(etf.isin);
         continue;
       }
       await EtfQuotation.upsert(
-        { isin: etf.isin, quotation, date: today, source: 'eodhd_eod' },
+        { isin: etf.isin, quotation: quote.price, date: quote.quotationDate, source: 'eodhd_eod' },
         { conflictFields: ['isin', 'date'] }
       );
-      todayMap.set(etf.isin, { isin: etf.isin, quotation, date: today });
+      todayMap.set(etf.isin, { isin: etf.isin, quotation: quote.price, date: quote.quotationDate });
     }
 
     const result = [];
