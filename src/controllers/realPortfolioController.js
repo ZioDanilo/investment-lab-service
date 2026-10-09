@@ -305,7 +305,7 @@ exports.getHoldings = async (req, res, next) => {
 
     const holdings = await RealPortfolioEtf.findAll({
       where: { realPortfolioId: portfolio.id },
-      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname'] }],
+      include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname', 'assetClass'] }],
       order: [['etfId', 'ASC']]
     });
     const basis = await buildCurrentCostBasis(portfolio.id);
@@ -329,7 +329,7 @@ exports.getHoldings = async (req, res, next) => {
       const gainLoss = marketValue == null ? null : marketValue - cost;
       return {
         id: row.etf.id, isin: row.etf.isin, ticker: row.etf.ticker, name: row.etf.name,
-        nickname: row.etf.nickname, quantity, averageCost, investedCapital: cost,
+        nickname: row.etf.nickname, assetClass: row.etf.assetClass, quantity, averageCost, investedCapital: cost,
         currentPrice, marketValue, gainLoss,
         gainLossPercent: cost > 0 && gainLoss != null ? gainLoss / cost * 100 : null,
         quotationDate: quote ? String(quote.date) : null

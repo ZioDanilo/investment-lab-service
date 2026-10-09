@@ -49,18 +49,51 @@ const isPlausibleQuotation = (quotation, previousQuotation) => {
 const getQuotationFromEODHD = async (etf) => {
   if (!etf?.isin) return null;
   try {
-    const { price, symbol, currency } = await fetchEodhdQuotation(etf);
+    const { price, symbol, currency, quotationDate } = await fetchEodhdQuotation(etf);
     const lastStoredQuotation = await getLatestStoredQuotation(etf.isin);
     if (lastStoredQuotation && !isPlausibleQuotation(price, lastStoredQuotation.quotation)) {
       console.warn(`✗ Rejected suspicious EODHD price for ${etf.ticker} (${etf.isin}): ${price} vs last valid ${lastStoredQuotation.quotation} on ${lastStoredQuotation.date}`);
       return null;
     }
-    console.log(`✓ Using EODHD price for ${etf.ticker} (${etf.isin}) [${symbol}, ${currency || 'currency n/a'}]: ${price}`);
-    return price;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(quotationDate || ''))) {
+      console.warn(`✗ Missing EODHD market date for ${etf.isin}; skipping persistence`);
+      return null;
+    }
+    console.log(`✓ EODHD ${etf.isin} [${symbol}, ${currency || 'n/a'}]: ${price} marketDate=${quotationDate}`);
+    return { price, quotationDate };
   } catch (error) {
     console.warn(`✗ EODHD failed for ${etf.ticker} (${etf.isin}): ${error.response?.status || ''} ${error.message}`.trim());
     return null;
   }
+};
+
+
+// Provider request attempts are separate from market quotation dates.
+// The unique (isin, request_date) key atomically reserves the daily quota
+// before contacting EODHD, including unsuccessful requests.
+let attemptsTableReady;
+const ensureAttemptsTable = async () => {
+  if (!attemptsTableReady) {
+    attemptsTableReady = sequelize.query(`
+      CREATE TABLE IF NOT EXISTS etf_quotation_fetch_attempts (
+        isin VARCHAR(255) NOT NULL,
+        request_date DATE NOT NULL,
+        attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (isin, request_date)
+      )`
+    ).catch(error => { attemptsTableReady = null; throw error; });
+  }
+  await attemptsTableReady;
+};
+const reserveDailyFetch = async (isin, today) => {
+  await ensureAttemptsTable();
+  const [rows] = await sequelize.query(`
+    INSERT INTO etf_quotation_fetch_attempts (isin, request_date)
+    VALUES (:isin, :today)
+    ON CONFLICT (isin, request_date) DO NOTHING
+    RETURNING isin
+  `, { replacements: { isin, today } });
+  return rows.length > 0;
 };
 
 // Daily cache is per ETF, not global: an ETF already stored today never calls EODHD again.
@@ -79,10 +112,10 @@ exports.getDailyQuotations = async (req, res, next) => {
     const cached = new Set(todayRows.map((row) => row.isin));
 
     for (const etf of allEtfs) {
-      if (cached.has(etf.isin)) continue;
-      const quotation = await getQuotationFromEODHD(etf);
-      if (quotation == null) continue;
-      await EtfQuotation.upsert({ isin: etf.isin, quotation, date: today, source: 'eodhd_eod' }, { conflictFields: ['isin', 'date'] });
+      if (cached.has(etf.isin) || !(await reserveDailyFetch(etf.isin, today))) continue;
+      const quote = await getQuotationFromEODHD(etf);
+      if (quote == null) continue;
+      await EtfQuotation.upsert({ isin: etf.isin, quotation: quote.price, date: quote.quotationDate, source: 'eodhd_eod' }, { conflictFields: ['isin', 'date'] });
     }
     return await fetchQuotationsWithVariation(res, today);
   } catch (error) { next(error); }
@@ -276,16 +309,21 @@ exports.refreshSingleQuotation = async (req, res, next) => {
       });
     }
 
+    if (!(await reserveDailyFetch(etf.isin, today))) {
+      return res.status(200).json({ success: true, data: { isin: etf.isin, name: etf.name, quotation: (await getLatestStoredQuotation(isin))?.quotation ?? null, variation: '-' }, date: today, cached: true });
+    }
+
     console.log(`\n🔄 Refreshing single quotation for ${etf.ticker} (${isin})`);
 
     // Fetch from EODHD
-    const quotation = await getQuotationFromEODHD(etf);
+    const quote = await getQuotationFromEODHD(etf);
+    const quotation = quote?.price ?? null;
 
     // Never persist a failed provider response. A NULL quotation is not a cache entry.
     if (quotation != null) {
       await EtfQuotation.upsert({
         isin: etf.isin,
-        date: today,
+        date: quote.quotationDate,
         quotation,
         source: 'eodhd_eod'
       }, {
@@ -362,19 +400,20 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
       // A NULL row can be left behind by a failed/configuration attempt and
       // must not prevent a later retry once the provider is available again.
       if (cachedToday?.quotation != null && Number.isFinite(Number(cachedToday.quotation))) continue;
+      if (!(await reserveDailyFetch(etf.isin, today))) continue;
 
-      const quotation = await getQuotationFromEODHD(etf);
-      if (quotation == null) {
+      const quote = await getQuotationFromEODHD(etf);
+      if (quote == null) {
         // Failed requests must not create/overwrite quotation rows. Keep the
         // previous stored value available to the portfolio and allow a retry.
         todayMap.delete(etf.isin);
         continue;
       }
       await EtfQuotation.upsert(
-        { isin: etf.isin, quotation, date: today, source: 'eodhd_eod' },
+        { isin: etf.isin, quotation: quote.price, date: quote.quotationDate, source: 'eodhd_eod' },
         { conflictFields: ['isin', 'date'] }
       );
-      todayMap.set(etf.isin, { isin: etf.isin, quotation, date: today });
+      todayMap.set(etf.isin, { isin: etf.isin, quotation: quote.price, date: quote.quotationDate });
     }
 
     const result = [];
