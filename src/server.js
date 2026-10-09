@@ -43,7 +43,7 @@ const allowedOrigins = new Set([
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.has(origin)) {
+    if (!origin || allowedOrigins.has(origin) || /^https:\/\/numeri(?:\.[a-z0-9-]+)?\.workers\.dev$/i.test(origin) || /^https:\/\/(?:[a-z0-9-]+\.)?numeri\.pages\.dev$/i.test(origin)) {
       callback(null, true);
       return;
     }
