@@ -3,7 +3,6 @@ const MagliaVirtus = require('../models/MagliaVirtus');
 const { Op } = require('sequelize');
 const router = express.Router();
 
-const ATLETI = ['Giacomo','Alessio','Lorenzo','Sonia','Asia','Paolo','Daniele','Francesca','Joshua','Sara','Sara M.','Luca','Andrea','Lillo','Cristiano'];
 const TAGLIE = ['S','M','L','XL','XXL','XXXL'];
 
 router.get('/', async (req, res, next) => {
@@ -19,7 +18,7 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { atleta, numero, taglia } = req.body || {};
-    if (typeof atleta !== 'string' || !ATLETI.includes(atleta) ||
+    if (typeof atleta !== 'string' || !atleta.trim() || atleta.length > 100 ||
         !Number.isInteger(numero) || numero < 1 || numero > 99 ||
         typeof taglia !== 'string' || !TAGLIE.includes(taglia)) {
       return res.status(400).json({ error: 'Atleta, numero o taglia non validi' });
