@@ -1,9 +1,8 @@
-// Eseguire UNA volta prima del deploy del nuovo backend: node scripts/migrate-giocatori.js
+// Migrazione idempotente: crea e popola giocatori; conserva maglie_virtus come backup.
 require('dotenv').config();
 const { sequelize } = require('../src/config/database');
 const NAMES = ['Alessio','Andrea','Asia','Cristiano','Daniele','Francesca','Giacomo','Joshua','Lillo','Lorenzo','Luca','Martina','Michela','Paolo','Sara D.','Sara M.','Sonia','Vale'];
-(async () => {
-  try {
+async function migrateGiocatori() {
     await sequelize.transaction(async transaction => {
       await sequelize.query(`CREATE TABLE IF NOT EXISTS giocatori (
         id SERIAL PRIMARY KEY, atleta VARCHAR(100) NOT NULL UNIQUE,
@@ -28,12 +27,14 @@ const NAMES = ['Alessio','Andrea','Asia','Cristiano','Daniele','Francesca','Giac
           sequelize.query('SELECT COUNT(*)::int AS n FROM giocatori WHERE numero IS NOT NULL', { transaction })
         ]);
         if (oldCount[0].n !== newCount[0].n) throw new Error('Conteggi non corrispondenti; rollback');
-        await sequelize.query('DROP TABLE maglie_virtus', { transaction });
+        // Conservare maglie_virtus come backup: nessuna cancellazione.
       }
       const [rows] = await sequelize.query('SELECT atleta, numero, taglia, ruolo FROM giocatori ORDER BY atleta', { transaction });
       if (rows.length !== NAMES.length) throw new Error('Attesi 18 giocatori, trovati ' + rows.length);
-      console.log('Migrazione completata:', rows.length, 'giocatori');
+      console.log('Migrazione completata:', rows.length, 'giocatori; maglie_virtus conservata');
     });
-  } catch (e) { console.error(e); process.exitCode = 1; }
-  finally { await sequelize.close(); }
-})();
+}
+module.exports = { migrateGiocatori };
+if (require.main === module) {
+  migrateGiocatori().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => sequelize.close());
+}
