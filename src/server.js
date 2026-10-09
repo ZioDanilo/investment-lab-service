@@ -16,6 +16,7 @@ const marketUniverseRoutes = require('./routes/marketUniverse');
 const realPortfolioRoutes = require('./routes/realPortfolio');
 const authRoutes = require('./routes/auth');
 const factorEngineRoutes = require('./routes/factorEngine');
+const giocatoriRoutes = require('./routes/giocatori');
 
 const app = express();
 
@@ -40,7 +41,7 @@ const allowedOrigins = new Set([
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.has(origin)) {
+    if (!origin || allowedOrigins.has(origin) || /^https:\/\/numeri(?:\.[a-z0-9-]+)?\.workers\.dev$/i.test(origin) || /^https:\/\/(?:[a-z0-9-]+\.)?numeri\.pages\.dev$/i.test(origin)) {
       callback(null, true);
       return;
     }
@@ -72,6 +73,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
+app.use('/api/giocatori', giocatoriRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/etf', etfRoutes);
