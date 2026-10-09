@@ -19,8 +19,7 @@ const factorEngineRoutes = require('./routes/factorEngine');
 
 const app = express();
 
-// Connect to Database
-connectDB();
+// La connessione e la migrazione sono completate prima di accettare richieste.
 
 // Setup Sequelize associations
 const { initializeAssociations } = require('./config/database');
@@ -98,6 +97,16 @@ app.use(errorHandler);
 
 // Start Server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Investment Lab Service running on port ${PORT}`);
+async function start() {
+  const db = await connectDB();
+  if (!db) throw new Error('Connessione al database non disponibile');
+  const { migrateGiocatori } = require('../scripts/migrate-giocatori');
+  await migrateGiocatori();
+  app.listen(PORT, () => {
+    console.log(`Investment Lab Service running on port ${PORT}`);
+  });
+}
+start().catch(error => {
+  console.error('Avvio interrotto: migrazione giocatori non riuscita', error);
+  process.exitCode = 1;
 });
