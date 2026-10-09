@@ -284,6 +284,8 @@ const connectDB = async () => {
     const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
     const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 
+    require('../models/MagliaVirtus');
+
     // Sync models with database
     try {
       await sequelize.sync();
