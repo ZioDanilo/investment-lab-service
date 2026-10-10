@@ -16,13 +16,11 @@ const marketUniverseRoutes = require('./routes/marketUniverse');
 const realPortfolioRoutes = require('./routes/realPortfolio');
 const authRoutes = require('./routes/auth');
 const factorEngineRoutes = require('./routes/factorEngine');
-
-const maglieVirtusRoutes = require('./routes/maglieVirtus');
+const giocatoriRoutes = require('./routes/giocatori');
 
 const app = express();
 
-// Connect to Database
-connectDB();
+// La connessione al database viene completata prima di accettare richieste.
 
 // Setup Sequelize associations
 const { initializeAssociations } = require('./config/database');
@@ -75,7 +73,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/maglie-virtus', maglieVirtusRoutes);
+app.use('/api/giocatori', giocatoriRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/portfolio', portfolioRoutes);
 app.use('/api/etf', etfRoutes);
@@ -101,6 +99,14 @@ app.use(errorHandler);
 
 // Start Server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Investment Lab Service running on port ${PORT}`);
+async function start() {
+  const db = await connectDB();
+  if (!db) throw new Error('Connessione al database non disponibile');
+  app.listen(PORT, () => {
+    console.log(`Investment Lab Service running on port ${PORT}`);
+  });
+}
+start().catch(error => {
+  console.error('Avvio interrotto:', error);
+  process.exitCode = 1;
 });
