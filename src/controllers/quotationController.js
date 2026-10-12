@@ -423,6 +423,7 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
     });
     const todayMap = new Map(todayRows.map((row) => [row.isin, row]));
 
+    const calledThisRequest = new Set();
     for (const etf of etfs) {
       const cachedToday = todayMap.get(etf.isin);
       // Only a valid EODHD quotation counts as today's cache hit.
@@ -468,8 +469,8 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
           provider: 'EODHD',
           symbol: etf.eodhdCode && etf.eodhdExchange ? `${etf.eodhdCode}.${etf.eodhdExchange}` : null,
           fetchStatus: attempt ? (attempt.fetch_status || 'attempt_recorded_outcome_unknown') : 'not_attempted_today',
-          providerCalled: false,
-          providerCalledThisRequest: false,
+          providerCalled: Boolean(attempt),
+          providerCalledThisRequest: calledThisRequest.has(etf.isin),
           lastAttempt: attempt?.attempted_at ?? null,
           providerDate: attempt?.provider_date ?? null,
           providerPrice: attempt?.provider_price != null ? Number(attempt.provider_price) : null,
