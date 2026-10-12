@@ -19,5 +19,10 @@ router.post('/force-refresh', quotationController.forceRefreshQuotations);
 
 // Refresh single ETF quotation
 router.post('/refresh-single', quotationController.refreshSingleQuotation);
+// Targeted EODHD refresh for the rebalance table (same daily provider quota/cache).
+router.post('/single/:isin/refresh', currentUser, (req, res, next) => {
+  req.query.isin = String(req.params.isin || '').trim().toUpperCase();
+  return quotationController.refreshSingleQuotation(req, res, next);
+});
 
 module.exports = router;
