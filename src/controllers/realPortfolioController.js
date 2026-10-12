@@ -468,3 +468,122 @@ exports.updateRealPortfolioOrder = async (req, res, next) => {
     next(error);
   }
 };
+
+const monthEnd = (month) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
+const nextMonth = (month) => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 1)).toISOString().slice(0, 7);
+
+// Historical portfolio valuation: positions are reconstructed from ALL trades,
+// rather than today's holdings. No future quote is ever used for an earlier month.
+exports.getPortfolioHistory = async (req, res, next) => {
+  try {
+    const portfolio = await Portafoglio.findOne({
+      where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' }
+    });
+    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+
+    const trades = await RealPortfolioOperation.findAll({
+      where: { realPortfolioId: portfolio.id, userId: req.user.id, operationType: { [Op.in]: ['buy', 'sell', 'tax'] } },
+      attributes: ['id', 'operationType', 'etfId', 'operationDate', 'quantity', 'unitPrice', 'createdAt'],
+      order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
+      raw: true
+    });
+    const firstTrade = trades.find(t => t.operationType === 'buy' || t.operationType === 'sell');
+    if (!firstTrade) return res.json({ success: true, data: [], incompleteMonths: [] });
+
+    const etfIds = [...new Set(trades.filter(t => t.etfId).map(t => String(t.etfId)))];
+    const etfs = await ETF.findAll({ where: { id: { [Op.in]: etfIds } }, attributes: ['id', 'isin'], raw: true });
+    const isinById = new Map(etfs.map(e => [String(e.id), e.isin]));
+    const isins = etfs.map(e => e.isin);
+    const firstMonth = String(firstTrade.operationDate).slice(0, 7);
+    const today = getTodayDateStringForHistory();
+    const lastMonth = today.slice(0, 7);
+    const quotes = isins.length ? await EtfQuotation.findAll({
+      where: { isin: { [Op.in]: isins }, quotation: { [Op.ne]: null }, date: { [Op.lte]: today } },
+      attributes: ['isin', 'date', 'quotation'],
+      order: [['date', 'ASC']],
+      raw: true
+    }) : [];
+    const quoteByIsin = new Map();
+    for (const quote of quotes) {
+      if (!quoteByIsin.has(quote.isin)) quoteByIsin.set(quote.isin, []);
+      quoteByIsin.get(quote.isin).push({ date: String(quote.date), price: Number(quote.quotation) });
+    }
+
+    const holdings = new Map();
+    const latestTradePrices = new Map();
+    const quoteCursor = new Map();
+    const lastQuote = new Map();
+    const points = [];
+    const incompleteMonths = [];
+    let tradeIndex = 0;
+    let netContributions = 0;
+    let realizedTaxes = 0;
+    let month = firstMonth;
+    // Include the initial trade date as a baseline; thereafter value at each month-end.
+    while (month <= lastMonth) {
+      const cutoff = month === lastMonth ? today : monthEnd(month);
+      while (tradeIndex < trades.length && String(trades[tradeIndex].operationDate) <= cutoff) {
+        const t = trades[tradeIndex++];
+        const qty = Number(t.quantity);
+        const price = Number(t.unitPrice);
+        if (t.operationType === 'tax') {
+          const tax = Number.isFinite(price) ? price * (Number.isFinite(qty) ? qty : 1) : 0;
+          realizedTaxes += tax;
+          netContributions -= tax;
+          continue;
+        }
+        const key = String(t.etfId);
+        const previous = holdings.get(key) || 0;
+        const delta = t.operationType === 'buy' ? qty : -qty;
+        holdings.set(key, Math.abs(previous + delta) < 1e-8 ? 0 : previous + delta);
+        latestTradePrices.set(key, { date: String(t.operationDate), price });
+        netContributions += delta * price;
+      }
+
+      let marketValue = 0;
+      let estimatedPositions = 0;
+      let missingPositions = 0;
+      const missingIsins = [];
+      for (const [etfId, qty] of holdings) {
+        if (qty <= 1e-8) continue;
+        const isin = isinById.get(etfId);
+        if (!isin) { missingPositions++; continue; }
+        const rows = quoteByIsin.get(isin) || [];
+        let cursor = quoteCursor.get(isin) || 0;
+        while (cursor < rows.length && rows[cursor].date <= cutoff) {
+          lastQuote.set(isin, rows[cursor]);
+          cursor++;
+        }
+        quoteCursor.set(isin, cursor);
+        const quoted = lastQuote.get(isin);
+        const tradePrice = latestTradePrices.get(etfId);
+        // If no historic quote exists, the known transaction price is a
+        // conservative provisional valuation, never a future market price.
+        const usableQuote = quoted && (!tradePrice || quoted.date >= tradePrice.date) ? quoted : null;
+        const valuation = usableQuote?.price ?? tradePrice?.price;
+        if (!Number.isFinite(valuation) || valuation <= 0) {
+          missingPositions++;
+          missingIsins.push(isin);
+          continue;
+        }
+        if (!usableQuote) estimatedPositions++;
+        marketValue += qty * valuation;
+      }
+      const complete = missingPositions === 0;
+      if (!complete) incompleteMonths.push(month);
+      points.push({
+        date: cutoff, month, marketValue: complete ? Number(marketValue.toFixed(2)) : null,
+        netContributions: Number(netContributions.toFixed(2)),
+        estimatedPositions, missingPositions, missingIsins,
+        valuation: !complete ? 'incomplete' : estimatedPositions ? 'partially_estimated' : 'market'
+      });
+      month = nextMonth(month);
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, data: points, incompleteMonths });
+  } catch (error) { next(error); }
+};
+
+const getTodayDateStringForHistory = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Rome', year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(new Date());
