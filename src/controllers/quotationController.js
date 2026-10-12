@@ -46,27 +46,41 @@ const isPlausibleQuotation = (quotation, previousQuotation) => {
 // Fetch one delayed live quotation from EODHD. The ISIN -> provider symbol mapping
 // is resolved once and persisted on anagrafica_etf; subsequent days cost one provider
 // call per ETF at most. Stored quotations are validated against the previous value.
-const getQuotationFromEODHD = async (etf) => {
+const getQuotationFromEODHD = async (etf, requestDate = null) => {
+  const report = async (status, details = {}) => {
+    if (requestDate) {
+      await ensureAttemptsTable();
+      await sequelize.query(`UPDATE etf_quotation_fetch_attempts SET fetch_status = :status, provider_date = :providerDate, provider_price = :providerPrice, error_message = :errorMessage WHERE isin = :isin AND request_date = :requestDate`, {
+        replacements: { status, providerDate: details.quotationDate ?? null, providerPrice: details.price ?? null, errorMessage: details.error ?? null, isin: etf.isin, requestDate }
+      });
+    }
+    console.log(`[EODHD] ${etf.isin} status=${status} providerDate=${details.quotationDate || '-'} providerPrice=${details.price ?? '-'} ${details.error || ''}`);
+  };
   if (!etf?.isin) return null;
   try {
     const { price, symbol, currency, quotationDate } = await fetchEodhdQuotation(etf);
     const lastStoredQuotation = await getLatestStoredQuotation(etf.isin);
     if (lastStoredQuotation && quotationDate < String(lastStoredQuotation.date)) {
       console.warn(`✗ Stale EODHD close for ${etf.isin}: marketDate=${quotationDate} < storedDate=${lastStoredQuotation.date}; retaining newer DB quotation`);
+      await report('stale', { quotationDate, price });
       return null;
     }
     if (lastStoredQuotation && !isPlausibleQuotation(price, lastStoredQuotation.quotation)) {
       console.warn(`✗ Rejected suspicious EODHD price for ${etf.ticker} (${etf.isin}): ${price} vs last valid ${lastStoredQuotation.quotation} on ${lastStoredQuotation.date}`);
+      await report('rejected_price', { quotationDate, price });
       return null;
     }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(quotationDate || ''))) {
       console.warn(`✗ Missing EODHD market date for ${etf.isin}; skipping persistence`);
+      await report('invalid_date', { price });
       return null;
     }
     console.log(`✓ EODHD ${etf.isin} [${symbol}, ${currency || 'n/a'}]: ${price} marketDate=${quotationDate}`);
+    await report('received', { quotationDate, price });
     return { price, quotationDate };
   } catch (error) {
     console.warn(`✗ EODHD failed for ${etf.ticker} (${etf.isin}): ${error.response?.status || ''} ${error.message}`.trim());
+    await report('error', { error: String(error.response?.status || error.message).slice(0, 250) });
     return null;
   }
 };
@@ -78,14 +92,21 @@ const getQuotationFromEODHD = async (etf) => {
 let attemptsTableReady;
 const ensureAttemptsTable = async () => {
   if (!attemptsTableReady) {
-    attemptsTableReady = sequelize.query(`
+    attemptsTableReady = (async () => {
+    await sequelize.query(`
       CREATE TABLE IF NOT EXISTS etf_quotation_fetch_attempts (
         isin VARCHAR(255) NOT NULL,
         request_date DATE NOT NULL,
         attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        fetch_status VARCHAR(32),
+        provider_date DATE,
+        provider_price NUMERIC(15,4),
+        error_message TEXT,
         PRIMARY KEY (isin, request_date)
-      )`
-    ).catch(error => { attemptsTableReady = null; throw error; });
+      )`);
+    await sequelize.query(`ALTER TABLE etf_quotation_fetch_attempts ADD COLUMN IF NOT EXISTS fetch_status VARCHAR(32), ADD COLUMN IF NOT EXISTS provider_date DATE, ADD COLUMN IF NOT EXISTS provider_price NUMERIC(15,4), ADD COLUMN IF NOT EXISTS error_message TEXT`);
+    return true;
+    })().catch(error => { attemptsTableReady = null; throw error; });
   }
   await attemptsTableReady;
 };
@@ -117,7 +138,7 @@ exports.getDailyQuotations = async (req, res, next) => {
 
     for (const etf of allEtfs) {
       if (cached.has(etf.isin) || !(await reserveDailyFetch(etf.isin, today))) continue;
-      const quote = await getQuotationFromEODHD(etf);
+      const quote = await getQuotationFromEODHD(etf, today);
       if (quote == null) continue;
       await EtfQuotation.upsert({ isin: etf.isin, quotation: quote.price, date: quote.quotationDate, source: 'eodhd_eod' }, { conflictFields: ['isin', 'date'] });
     }
@@ -424,14 +445,37 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
       todayMap.set(etf.isin, { isin: etf.isin, quotation: quote.price, date: quote.quotationDate });
     }
 
+    await ensureAttemptsTable();
+    const [attemptRows] = await sequelize.query(`
+      SELECT isin, attempted_at, fetch_status, provider_date, provider_price, error_message
+      FROM etf_quotation_fetch_attempts
+      WHERE request_date = :today AND isin IN (:isins)
+    `, { replacements: { today, isins } });
+    const attemptMap = new Map(attemptRows.map((attempt) => [attempt.isin, attempt]));
+
     const result = [];
     for (const etf of etfs) {
       // Always return the newest stored market date, never a stale provider result.
       const row = await getLatestStoredQuotation(etf.isin);
+      const attempt = attemptMap.get(etf.isin);
+      const marketDate = row?.date ? String(row.date) : null;
+      const quotationAgeDays = marketDate ? Math.max(0, Math.round((Date.parse(today + 'T00:00:00Z') - Date.parse(marketDate + 'T00:00:00Z')) / 86400000)) : null;
       result.push({
         isin: etf.isin, name: etf.name, nickname: etf.nickname, ticker: etf.ticker,
         quotation: row?.quotation != null ? Number(row.quotation) : null,
-        date: row?.date ?? null
+        date: marketDate,
+        diagnostic: {
+          provider: 'EODHD',
+          symbol: etf.eodhdCode && etf.eodhdExchange ? `${etf.eodhdCode}.${etf.eodhdExchange}` : null,
+          fetchStatus: attempt ? (attempt.fetch_status || 'attempt_recorded_outcome_unknown') : 'not_attempted_today',
+          providerCalled: false,
+          providerCalledThisRequest: false,
+          lastAttempt: attempt?.attempted_at ?? null,
+          providerDate: attempt?.provider_date ?? null,
+          providerPrice: attempt?.provider_price != null ? Number(attempt.provider_price) : null,
+          error: attempt?.error_message ?? null,
+          quotationAgeDays
+        }
       });
     }
     res.status(200).json({ success: true, data: result, date: today });
