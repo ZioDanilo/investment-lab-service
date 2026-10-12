@@ -51,6 +51,10 @@ const getQuotationFromEODHD = async (etf) => {
   try {
     const { price, symbol, currency, quotationDate } = await fetchEodhdQuotation(etf);
     const lastStoredQuotation = await getLatestStoredQuotation(etf.isin);
+    if (lastStoredQuotation && quotationDate < String(lastStoredQuotation.date)) {
+      console.warn(`✗ Stale EODHD close for ${etf.isin}: marketDate=${quotationDate} < storedDate=${lastStoredQuotation.date}; retaining newer DB quotation`);
+      return null;
+    }
     if (lastStoredQuotation && !isPlausibleQuotation(price, lastStoredQuotation.quotation)) {
       console.warn(`✗ Rejected suspicious EODHD price for ${etf.ticker} (${etf.isin}): ${price} vs last valid ${lastStoredQuotation.quotation} on ${lastStoredQuotation.date}`);
       return null;
@@ -331,16 +335,19 @@ exports.refreshSingleQuotation = async (req, res, next) => {
       });
     }
 
+    const latestStored = await getLatestStoredQuotation(isin);
+    const effectiveQuotation = latestStored?.quotation != null ? Number(latestStored.quotation) : null;
     const status = quotation !== null ? `✓ €${quotation}` : '✗ ND';
     console.log(`   ${status}\n`);
 
     // Calculate variation
     let variation = '-';
-    if (quotation !== null) {
+    if (effectiveQuotation !== null && latestStored?.date) {
       const previousQuote = await EtfQuotation.findOne({
         where: {
           isin: isin,
-          date: { [Op.lt]: today }
+          date: { [Op.lt]: latestStored.date },
+          quotation: { [Op.ne]: null }
         },
         attributes: ['quotation'],
         order: [['date', 'DESC']],
@@ -348,7 +355,7 @@ exports.refreshSingleQuotation = async (req, res, next) => {
       });
 
       if (previousQuote) {
-        const variationPercent = ((quotation - previousQuote.quotation) / previousQuote.quotation * 100).toFixed(2);
+        const variationPercent = ((effectiveQuotation - previousQuote.quotation) / previousQuote.quotation * 100).toFixed(2);
         variation = `${variationPercent}%`;
       }
     }
@@ -358,7 +365,8 @@ exports.refreshSingleQuotation = async (req, res, next) => {
       data: {
         isin: etf.isin,
         name: etf.name,
-        quotation: quotation !== null ? parseFloat(quotation) : null,
+        quotation: effectiveQuotation,
+        date: latestStored?.date ?? null,
         variation: variation
       },
       date: today
@@ -418,8 +426,8 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
 
     const result = [];
     for (const etf of etfs) {
-      let row = todayMap.get(etf.isin);
-      if (!row) row = await getLatestStoredQuotation(etf.isin);
+      // Always return the newest stored market date, never a stale provider result.
+      const row = await getLatestStoredQuotation(etf.isin);
       result.push({
         isin: etf.isin, name: etf.name, nickname: etf.nickname, ticker: etf.ticker,
         quotation: row?.quotation != null ? Number(row.quotation) : null,
