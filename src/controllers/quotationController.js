@@ -48,13 +48,35 @@ const isPlausibleQuotation = (quotation, previousQuotation) => {
 // call per ETF at most. Stored quotations are validated against the previous value.
 const getQuotationFromEODHD = async (etf, requestDate = null) => {
   const report = async (status, details = {}) => {
-    if (requestDate) {
+    if (!requestDate) return;
+    try {
       await ensureAttemptsTable();
-      await sequelize.query(`UPDATE etf_quotation_fetch_attempts SET fetch_status = :status, provider_date = :providerDate, provider_price = :providerPrice, error_message = :errorMessage WHERE isin = :isin AND request_date = :requestDate`, {
-        replacements: { status, providerDate: details.quotationDate ?? null, providerPrice: details.price ?? null, errorMessage: details.error ?? null, isin: etf.isin, requestDate }
+      const [rows] = await sequelize.query(`
+        UPDATE etf_quotation_fetch_attempts
+        SET fetch_status = :status,
+            provider_date = :providerDate,
+            provider_price = :providerPrice,
+            error_message = :errorMessage
+        WHERE isin = :isin AND request_date = :requestDate
+        RETURNING isin, fetch_status
+      `, {
+        replacements: {
+          status,
+          providerDate: details.quotationDate ?? null,
+          providerPrice: details.price ?? null,
+          errorMessage: details.error ?? null,
+          isin: etf.isin,
+          requestDate
+        }
       });
+      if (rows.length !== 1) {
+        console.error(`[EODHD diagnostic] update affected ${rows.length} rows for ${etf.isin} on ${requestDate}`);
+      } else {
+        console.log(`[EODHD diagnostic] ${etf.isin} status=${status} providerDate=${details.quotationDate || '-'} providerPrice=${details.price ?? '-'}`);
+      }
+    } catch (diagnosticError) {
+      console.error(`[EODHD diagnostic] persistence failed for ${etf.isin}: ${diagnosticError.message}`);
     }
-    console.log(`[EODHD] ${etf.isin} status=${status} providerDate=${details.quotationDate || '-'} providerPrice=${details.price ?? '-'} ${details.error || ''}`);
   };
   if (!etf?.isin) return null;
   try {
