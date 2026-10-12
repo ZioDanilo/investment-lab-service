@@ -529,7 +529,8 @@ exports.getPortfolioHistory = async (req, res, next) => {
         if (t.operationType === 'tax') {
           const tax = Number.isFinite(price) ? price * (Number.isFinite(qty) ? qty : 1) : 0;
           realizedTaxes += tax;
-          netContributions -= tax;
+          // Tax withholding is an external cash outflow, not a trade contribution.
+          // Track separately so the invested-capital line remains comparable.
           continue;
         }
         const key = String(t.etfId);
@@ -574,6 +575,7 @@ exports.getPortfolioHistory = async (req, res, next) => {
       points.push({
         date: cutoff, month, marketValue: complete ? Number(marketValue.toFixed(2)) : null,
         netContributions: Number(netContributions.toFixed(2)),
+        realizedTaxes: Number(realizedTaxes.toFixed(2)),
         estimatedPositions, missingPositions, missingIsins,
         valuation: !complete ? 'incomplete' : estimatedPositions ? 'partially_estimated' : 'market'
       });
