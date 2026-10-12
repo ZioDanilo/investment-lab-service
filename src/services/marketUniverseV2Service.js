@@ -1,7 +1,6 @@
 const { Op } = require('sequelize');
 const ETF = require('../models/ETF');
 const EtfMacroStatistics = require('../models/EtfMacroStatistics');
-const EtfCorrelation = require('../models/EtfCorrelation');
 const StructuralProbability = require('../models/StructuralProbability');
 const TransitionMatrix = require('../models/TransitionMatrix');
 const ScenarioInertiaConfiguration = require('../models/ScenarioInertiaConfiguration');
@@ -68,17 +67,16 @@ class MarketUniverseV2Service {
   }
 
   static async buildMacroSnapshot(isins) {
-    const [etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties, correlations] = await Promise.all([
+    const [etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties] = await Promise.all([
       ETF.findAll({ where: { isin: { [Op.in]: isins } }, attributes: ['isin','name','nickname'], raw: true }),
       EtfMacroStatistics.findAll({ where: { isin: { [Op.in]: isins } }, raw: true }),
       StructuralProbability.findAll({ raw: true }),
       TransitionMatrix.findAll({ raw: true }),
       ScenarioInertiaConfiguration.findAll({ raw: true }),
       ScenarioIntensityConfiguration.findAll({ raw: true }),
-      MonteCarloGlobalProperty.findAll({ raw: true }),
-      EtfCorrelation.findAll({ where: { isin1: { [Op.in]: isins }, isin2: { [Op.in]: isins } }, raw: true })
+      MonteCarloGlobalProperty.findAll({ raw: true })
     ]);
-    return buildMonteCarloSnapshot({ isins, etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties, correlations });
+    return buildMonteCarloSnapshot({ isins, etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties, correlations: [] });
   }
 
   static async regenerate({ seed = 42, pathCount = 1000, monthCount = 360, _runId = null } = {}) {
@@ -97,7 +95,8 @@ class MarketUniverseV2Service {
       const assetOrder = operationalEtfs.map((etf) => normalizeIsin(etf.isin));
       // Macro-state generation is global: one calibrated ETF is sufficient to let the
       // legacy snapshot builder validate/normalize the shared Markov/intensity config.
-      // V2 ETF returns themselves come exclusively from the factor snapshot below.
+      // This single-ETF macro snapshot needs no ETF-pair correlations; V2 return
+      // dependence is generated exclusively by the factor engine below.
       const macroSnapshot = await this.buildMacroSnapshot([assetOrder[0]]);
       let runtime = await import('investment-lab-core');
       if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function') {
