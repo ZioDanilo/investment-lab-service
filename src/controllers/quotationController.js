@@ -2,7 +2,7 @@ const ETF=require('../models/ETF');
 const EtfQuotation=require('../models/EtfQuotation');
 const Portafoglio=require('../models/Portafoglio');
 const RealPortfolioEtf=require('../models/RealPortfolioEtf');
-const {Op}=require('../config/database');
+const {Op}=require('sequelize');
 const {updateEtf,updateAll}=require('../services/yahooQuotationService');
 const noCache=res=>res.set('Cache-Control','no-store');
 const latest=isin=>EtfQuotation.findOne({where:{isin,quotation:{[Op.ne]:null}},order:[['date','DESC']],raw:true});
