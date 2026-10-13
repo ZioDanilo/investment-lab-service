@@ -61,9 +61,11 @@ router.get('/diagnostic', async (req, res) => {
 const { sequelize } = require('../config/database');
 const ETF = require('../models/ETF');
 
-const localDate = (seconds, timeZone = 'Europe/Berlin') => new Intl.DateTimeFormat('en-CA', {
-  timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
-}).format(new Date(seconds * 1000));
+const localDate = (seconds, timeZone = 'Europe/Berlin') => {
+  const parts = new Intl.DateTimeFormat('en-GB', {timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(seconds*1000));
+  const p = Object.fromEntries(parts.map(x=>[x.type,x.value]));
+  return p.year + '-' + p.month + '-' + p.day;
+};
 const validPrice = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 const resolveSymbol = etf => {
   const ticker = String(etf.ticker || '').trim().toUpperCase();
@@ -86,7 +88,7 @@ router.post('/update-quotations', async (req, res) => {
       { replacements: { today } }
     );
     const covered = new Set(existingToday.map(row => row.isin));
-    const missing = etfs.filter(etf => !covered.has(etf.isin));
+    const missing = etfs; // Always request Yahoo on explicit refresh.
     const report = {
       success: true, date: today, totalEtfs: etfs.length, alreadyUpdatedToday: covered.size,
       toUpdate: missing.length, processed: 0, inserted: 0, existing: 0, skippedPrices: 0,
@@ -130,9 +132,11 @@ router.post('/update-quotations', async (req, res) => {
             INSERT INTO etf_quotations (id, isin, date, quotation, source, "createdAt", "updatedAt")
             SELECT gen_random_uuid(), :isin, r.date, r.quotation, 'yahoo_chart', NOW(), NOW()
             FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS r(date date, quotation numeric)
-            ON CONFLICT (isin, date) DO NOTHING
+            ON CONFLICT (isin, date) DO UPDATE
+            SET quotation = EXCLUDED.quotation, source = EXCLUDED.source, "updatedAt" = NOW()
+            WHERE etf_quotations.date = :today
             RETURNING date
-          `, { replacements: { isin: etf.isin, rows: JSON.stringify(rows) } });
+          `, { replacements: { isin: etf.isin, rows: JSON.stringify(rows), today: exchangeToday } });
           insertedCount = inserted.length;
         }
         report.processed++;
