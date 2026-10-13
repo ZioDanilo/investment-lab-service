@@ -67,6 +67,35 @@ const localDate = (seconds, timeZone = 'Europe/Berlin') => {
   return p.year + '-' + p.month + '-' + p.day;
 };
 const validPrice = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
+// Reject extreme price-scale anomalies before writing historical quotes.
+const median = values => {
+  const sorted = values.filter(validPrice).sort((a,b) => a-b);
+  if (!sorted.length) return null;
+  const mid = Math.floor(sorted.length/2);
+  return sorted.length%2 ? sorted[mid] : (sorted[mid-1]+sorted[mid])/2;
+};
+const extremeRatio = (price, reference) => validPrice(price) && validPrice(reference) &&
+  (price/reference > 3 || price/reference < 1/3);
+const validateYahooRows = (rows, storedRows, splits = {}) => {
+  const known = new Map(storedRows.filter(r => validPrice(Number(r.quotation)))
+    .map(r => [String(r.date).slice(0,10), Number(r.quotation)]));
+  const baseline = median([...known.values()]);
+  const downloadBaseline = median(rows.map(r => r.quotation));
+  const accepted = [], rejected = [];
+  for (const row of rows) {
+    const nearbyKnown = rows.filter(r => r.date !== row.date && known.has(r.date))
+      .sort((a,b) => Math.abs(Date.parse(a.date)-Date.parse(row.date)) -
+        Math.abs(Date.parse(b.date)-Date.parse(row.date)))
+      .slice(0,10).map(r => known.get(r.date));
+    const reference = median(nearbyKnown) ?? baseline ?? downloadBaseline;
+    if (extremeRatio(row.quotation, reference)) {
+      rejected.push({ date:row.date, quotation:row.quotation, reference,
+        reason:'extreme_price_ratio_requires_review',
+        possibleCorporateAction:Object.keys(splits).length > 0 });
+    } else accepted.push(row);
+  }
+  return { accepted, rejected };
+};
 const resolveSymbol = etf => {
   const ticker = String(etf.ticker || '').trim().toUpperCase();
   const marketCode = String(etf.marketCode || '').trim().toUpperCase();
@@ -92,7 +121,7 @@ router.post('/update-quotations', async (req, res) => {
     const report = {
       success: true, date: today, totalEtfs: etfs.length, alreadyUpdatedToday: covered.size,
       toUpdate: missing.length, processed: 0, inserted: 0, updatedToday: 0, existing: 0, skippedPrices: 0,
-      skippedMappings: [], failures: [], results: []
+      skippedMappings: [], failures: [], rejectedPrices: [], results: []
     };
     for (const etf of missing) {
       const symbol = resolveSymbol(etf);
@@ -101,7 +130,7 @@ router.post('/update-quotations', async (req, res) => {
         continue;
       }
       try {
-        const response = await yahoo('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=2y&interval=1d');
+        const response = await yahoo('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=2y&interval=1d&events=splits');
         if (response.error) throw new Error('Yahoo HTTP ' + response.error.status);
         const chart = response.chart?.result?.[0];
         if (!chart || chart.meta?.symbol?.toUpperCase() !== symbol) throw new Error('Risposta Yahoo non coerente con ' + symbol);
@@ -125,7 +154,15 @@ router.post('/update-quotations', async (req, res) => {
           if (!validPrice(quotation)) { skipped++; continue; }
           rowsByDate.set(date, { date, quotation });
         }
-        const rows = [...rowsByDate.values()];
+        const candidates = [...rowsByDate.values()].sort((a,b) => a.date.localeCompare(b.date));
+        const [storedRows] = await sequelize.query(
+          'SELECT date, quotation FROM etf_quotations WHERE isin = :isin AND quotation > 0 ORDER BY date',
+          { replacements: { isin: etf.isin } }
+        );
+        const validation = validateYahooRows(candidates, storedRows, chart.events?.splits);
+        const rows = validation.accepted;
+        report.rejectedPrices.push(...validation.rejected.map(r => ({ isin:etf.isin, symbol, ...r })));
+        if (validation.rejected.length) console.warn('[Yahoo quotations] quarantined', etf.isin, validation.rejected);
         let insertedCount = 0;
         if (rows.length) {
           const [inserted] = await sequelize.query(`
@@ -145,7 +182,7 @@ router.post('/update-quotations', async (req, res) => {
         report.existing += rows.length - insertedCount - (report.updatedToday - (report._previousUpdatedToday || 0));
         report._previousUpdatedToday = report.updatedToday;
         report.skippedPrices += skipped;
-        report.results.push({ isin: etf.isin, symbol, received: timestamps.length, inserted: insertedCount, existing: rows.length - insertedCount, skipped });
+        report.results.push({ isin: etf.isin, symbol, received: timestamps.length, inserted: insertedCount, existing: rows.length - insertedCount, skipped, rejected: validation.rejected.length });
       } catch (error) {
         report.failures.push({ isin: etf.isin, symbol, error: String(error.message || error) });
       }
