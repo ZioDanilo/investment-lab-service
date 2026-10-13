@@ -12,6 +12,7 @@ const rebalanceRoutes = require('./routes/rebalance');
 const quotationRoutes = require('./routes/quotation');
 const marketUniverseRoutes = require('./routes/marketUniverse');
 const realPortfolioRoutes = require('./routes/realPortfolio');
+const trendFollowingRoutes = require('./routes/trendFollowing');
 const authRoutes = require('./routes/auth');
 const factorEngineRoutes = require('./routes/factorEngine');
 const giocatoriRoutes = require('./routes/giocatori');
@@ -83,6 +84,7 @@ app.use('/api/rebalance', rebalanceRoutes);
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/market-universe', marketUniverseRoutes);
 app.use('/api/real-portfolios', realPortfolioRoutes);
+app.use('/api/trend-following', trendFollowingRoutes);
 app.use('/api/factor-engine', factorEngineRoutes);
 
 // 404 Handler
