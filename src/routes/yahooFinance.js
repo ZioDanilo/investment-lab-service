@@ -91,7 +91,7 @@ router.post('/update-quotations', async (req, res) => {
     const missing = etfs; // Always request Yahoo on explicit refresh.
     const report = {
       success: true, date: today, totalEtfs: etfs.length, alreadyUpdatedToday: covered.size,
-      toUpdate: missing.length, processed: 0, inserted: 0, existing: 0, skippedPrices: 0,
+      toUpdate: missing.length, processed: 0, inserted: 0, updatedToday: 0, existing: 0, skippedPrices: 0,
       skippedMappings: [], failures: [], results: []
     };
     for (const etf of missing) {
@@ -135,19 +135,22 @@ router.post('/update-quotations', async (req, res) => {
             ON CONFLICT (isin, date) DO UPDATE
             SET quotation = EXCLUDED.quotation, source = EXCLUDED.source, "updatedAt" = NOW()
             WHERE etf_quotations.date = :today
-            RETURNING date
+            RETURNING date, (xmax = 0) AS was_inserted
           `, { replacements: { isin: etf.isin, rows: JSON.stringify(rows), today: exchangeToday } });
-          insertedCount = inserted.length;
+          insertedCount = inserted.filter(row => row.was_inserted).length;
+          report.updatedToday += inserted.length - insertedCount;
         }
         report.processed++;
         report.inserted += insertedCount;
-        report.existing += rows.length - insertedCount;
+        report.existing += rows.length - insertedCount - (report.updatedToday - (report._previousUpdatedToday || 0));
+        report._previousUpdatedToday = report.updatedToday;
         report.skippedPrices += skipped;
         report.results.push({ isin: etf.isin, symbol, received: timestamps.length, inserted: insertedCount, existing: rows.length - insertedCount, skipped });
       } catch (error) {
         report.failures.push({ isin: etf.isin, symbol, error: String(error.message || error) });
       }
     }
+    delete report._previousUpdatedToday;
     return res.set('Cache-Control', 'no-store').json(report);
   } catch (error) {
     console.error('[Yahoo bulk quotations]', error);
