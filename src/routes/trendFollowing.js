@@ -3,6 +3,8 @@ const currentUser = require('../middleware/currentUser');
 const controller = require('../controllers/trendFollowingController');
 const router = express.Router();
 router.use(currentUser);
+router.get('/:portfolioId/strategies/:strategyKey/etfs', controller.getEtfSelections);
+router.put('/:portfolioId/strategies/:strategyKey/etfs', controller.putEtfSelections);
 router.get('/:portfolioId/etfs', controller.getEtfs);
 router.get('/:portfolioId', controller.get);
 router.put('/:portfolioId', controller.put);
