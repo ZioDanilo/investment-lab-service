@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const requireAdminRole = require('../middleware/requireAdminRole');
 const BASE = 'https://query1.finance.yahoo.com';
 const allowed = /^[A-Za-z0-9^._=\-]{1,40}$/;
 async function yahoo(path) {
@@ -59,7 +60,7 @@ router.get('/diagnostic', async (req, res) => {
 });
 
 const { updateAll } = require('../services/yahooQuotationService');
-router.post('/update-quotations', async(req,res)=>{
+router.post('/update-quotations', requireAdminRole, async(req,res)=>{
   try{
     const report=await updateAll({historical:true});
     return res.set('Cache-Control','no-store').json(report);
