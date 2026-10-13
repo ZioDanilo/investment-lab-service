@@ -1,38 +1,4 @@
-const { MarketUniverseService } = require('../services/marketUniverseService');
 const { MarketUniverseV2Service } = require('../services/marketUniverseV2Service');
-
-const getAllAssets = async (req, res, next) => {
-  try {
-    const assets = await MarketUniverseService.getAllAssets();
-    return res.status(200).json({ success: true, data: assets });
-  } catch (error) {
-    return next(error);
-  }
-};
-
-const getAssetById = async (req, res, next) => {
-  try {
-    const asset = await MarketUniverseService.getAssetById(req.params.id);
-    if (!asset) {
-      return res.status(404).json({ success: false, error: 'Asset not found' });
-    }
-    return res.status(200).json({ success: true, data: asset });
-  } catch (error) {
-    return next(error);
-  }
-};
-
-const getAssetByIsin = async (req, res, next) => {
-  try {
-    const asset = await MarketUniverseService.getAssetByIsin(req.params.isin);
-    if (!asset) {
-      return res.status(404).json({ success: false, error: 'Asset not found by ISIN' });
-    }
-    return res.status(200).json({ success: true, data: asset });
-  } catch (error) {
-    return next(error);
-  }
-};
 
 const regenerateMarketUniverseV2 = async (req, res) => {
   try {
@@ -79,9 +45,6 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
 };
 
 module.exports = {
-  getAllAssets,
-  getAssetById,
-  getAssetByIsin,
   regenerateMarketUniverseV2,
   getMarketUniverseV2GenerationStatus,
   buildBinaryPortfolioProjectionV2
