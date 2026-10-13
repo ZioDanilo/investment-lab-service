@@ -27,6 +27,11 @@ const ETF = sequelize.define('ETF', {
   ticker: {
     type: DataTypes.STRING
   },
+  marketCode: {
+    type: DataTypes.STRING(10),
+    allowNull: true,
+    field: 'market_code'
+  },
   eodhdCode: {
     type: DataTypes.STRING,
     allowNull: true,
