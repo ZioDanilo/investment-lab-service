@@ -88,7 +88,9 @@ const fetchEodhdQuotation = async (etf) => {
   });
 
   const rows = Array.isArray(data) ? data : [];
-  const latest = rows.length ? rows[rows.length - 1] : null;
+  const latest = rows
+    .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(String(row?.date || '')) && Number.isFinite(Number(row?.close)) && Number(row.close) > 0)
+    .reduce((newest, row) => !newest || row.date > newest.date ? row : newest, null);
   const price = Number(latest?.close);
   if (!Number.isFinite(price) || price <= 0) {
     throw new Error(`EODHD returned no valid EOD close for ${symbol}`);
