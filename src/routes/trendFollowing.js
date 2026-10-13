@@ -1,0 +1,8 @@
+const express = require('express');
+const currentUser = require('../middleware/currentUser');
+const controller = require('../controllers/trendFollowingController');
+const router = express.Router();
+router.use(currentUser);
+router.get('/:portfolioId', controller.get);
+router.put('/:portfolioId', controller.put);
+module.exports = router;
