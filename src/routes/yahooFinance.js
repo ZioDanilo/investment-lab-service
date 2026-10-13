@@ -60,15 +60,15 @@ router.get('/diagnostic', async (req, res) => {
 
 const { sequelize } = require('../config/database');
 const ETF = require('../models/ETF');
-const IMPORT_ISIN = 'IE00BL25JP72';
-const IMPORT_SYMBOL = 'XDEM.DE';
+const IMPORT_ISIN = 'LU3307218399';
+const IMPORT_SYMBOL = 'EEAU.DE';
 const localDate = seconds => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
 }).format(new Date(seconds * 1000));
 const validPrice = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 // Historical import: inserts missing dates only, preserving all existing prices.
-router.post('/import-xdem', async (req, res) => {
+router.post('/import-eeau', async (req, res) => {
   try {
     const etf = await ETF.findOne({ where: { isin: IMPORT_ISIN }, attributes: ['isin'], raw: true });
     if (!etf) return res.status(404).json({ success: false, error: 'ISIN ' + IMPORT_ISIN + ' assente in anagrafica_etf' });
