@@ -479,111 +479,99 @@ exports.getPortfolioHistory = async (req, res, next) => {
     const portfolio = await Portafoglio.findOne({
       where: { id: req.params.id, userId: req.user.id, tipo: 'reale', status: 'open' }
     });
-    if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
+    if (!portfolio) return res.status(404).json({success:false,error:'Portafoglio reale non trovato'});
 
     const trades = await RealPortfolioOperation.findAll({
-      where: { realPortfolioId: portfolio.id, userId: req.user.id, operationType: { [Op.in]: ['buy', 'sell', 'tax'] } },
-      attributes: ['id', 'operationType', 'etfId', 'operationDate', 'quantity', 'unitPrice', 'createdAt'],
-      order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
-      raw: true
+      where: { realPortfolioId: portfolio.id, userId: req.user.id, operationType: { [Op.in]: ['buy','sell','tax'] } },
+      attributes: ['id','operationType','etfId','operationDate','quantity','unitPrice','createdAt'],
+      order: [['operationDate','ASC'],['createdAt','ASC'],['id','ASC']], raw: true
     });
     const firstTrade = trades.find(t => t.operationType === 'buy' || t.operationType === 'sell');
-    if (!firstTrade) return res.json({ success: true, data: [], incompleteMonths: [] });
+    if (!firstTrade) return res.json({success:true,data:[],incompleteDays:[]});
 
-    const etfIds = [...new Set(trades.filter(t => t.etfId).map(t => String(t.etfId)))];
-    const etfs = await ETF.findAll({ where: { id: { [Op.in]: etfIds } }, attributes: ['id', 'isin'], raw: true });
-    const isinById = new Map(etfs.map(e => [String(e.id), e.isin]));
-    const isins = etfs.map(e => e.isin);
-    const firstMonth = String(firstTrade.operationDate).slice(0, 7);
+    const ids = [...new Set(trades.filter(t => t.etfId).map(t => String(t.etfId)))];
+    const etfs = await ETF.findAll({where:{id:{[Op.in]:ids}},attributes:['id','isin'],raw:true});
+    const isinById = new Map(etfs.map(e=>[String(e.id),e.isin]));
     const today = getTodayDateStringForHistory();
-    const lastMonth = today.slice(0, 7);
-    const quotes = isins.length ? await EtfQuotation.findAll({
-      where: { isin: { [Op.in]: isins }, quotation: { [Op.ne]: null }, date: { [Op.lte]: today } },
-      attributes: ['isin', 'date', 'quotation'],
-      order: [['date', 'ASC']],
-      raw: true
+    const firstDate = String(firstTrade.operationDate).slice(0,10);
+    const quotes = etfs.length ? await EtfQuotation.findAll({
+      where:{isin:{[Op.in]:etfs.map(e=>e.isin)},quotation:{[Op.ne]:null},date:{[Op.lte]:today}},
+      attributes:['isin','date','quotation'],order:[['date','ASC']],raw:true
     }) : [];
-    const quoteByIsin = new Map();
-    for (const quote of quotes) {
-      if (!quoteByIsin.has(quote.isin)) quoteByIsin.set(quote.isin, []);
-      quoteByIsin.get(quote.isin).push({ date: String(quote.date), price: Number(quote.quotation) });
+    const byIsin = new Map();
+    for (const q of quotes) {
+      if (!byIsin.has(q.isin)) byIsin.set(q.isin,[]);
+      byIsin.get(q.isin).push({date:String(q.date),price:Number(q.quotation)});
     }
-
-    const holdings = new Map();
-    const latestTradePrices = new Map();
-    const quoteCursor = new Map();
-    const lastQuote = new Map();
-    const points = [];
-    const incompleteMonths = [];
-    let tradeIndex = 0;
-    let netContributions = 0;
-    let realizedTaxes = 0;
-    let month = firstMonth;
-    // Include the initial trade date as a baseline; thereafter value at each month-end.
-    while (month <= lastMonth) {
-      const cutoff = month === lastMonth ? today : monthEnd(month);
-      while (tradeIndex < trades.length && String(trades[tradeIndex].operationDate) <= cutoff) {
-        const t = trades[tradeIndex++];
-        const qty = Number(t.quantity);
-        const price = Number(t.unitPrice);
-        if (t.operationType === 'tax') {
-          const tax = Number.isFinite(price) ? price * (Number.isFinite(qty) ? qty : 1) : 0;
-          realizedTaxes += tax;
-          // Tax withholding is an external cash outflow, not a trade contribution.
-          // Track separately so the invested-capital line remains comparable.
+    const dates = new Set([firstDate,today]);
+    for (const q of quotes) if (String(q.date)>=firstDate) dates.add(String(q.date));
+    for (const t of trades) if (String(t.operationDate)>=firstDate && String(t.operationDate)<=today) dates.add(String(t.operationDate));
+    const calendar = [...dates].sort();
+    const holdings = new Map(), lastTrades = new Map(), cursors = new Map(), latest = new Map();
+    let tradeIndex=0, netContributions=0, realizedTaxes=0, twrIndex=100, previousValue=null;
+    const points=[],incompleteDays=[];
+    for (const date of calendar) {
+      const previousHoldings = new Map(holdings);
+      let dailyFlow=0;
+      while (tradeIndex<trades.length && String(trades[tradeIndex].operationDate)<=date) {
+        const t=trades[tradeIndex++],qty=Number(t.quantity),price=Number(t.unitPrice);
+        if (t.operationType==='tax') {
+          if(Number.isFinite(price)) realizedTaxes+=price*(Number.isFinite(qty)?qty:1);
           continue;
         }
-        const key = String(t.etfId);
-        const previous = holdings.get(key) || 0;
-        const delta = t.operationType === 'buy' ? qty : -qty;
-        holdings.set(key, Math.abs(previous + delta) < 1e-8 ? 0 : previous + delta);
-        latestTradePrices.set(key, { date: String(t.operationDate), price });
-        netContributions += delta * price;
+        if(!Number.isFinite(qty)||!Number.isFinite(price))continue;
+        const key=String(t.etfId),delta=t.operationType==='buy'?qty:-qty;
+        holdings.set(key,(holdings.get(key)||0)+delta);
+        lastTrades.set(key,{date:String(t.operationDate),price});
+        dailyFlow+=delta*price;
+        netContributions+=delta*price;
       }
-
-      let marketValue = 0;
-      let estimatedPositions = 0;
-      let missingPositions = 0;
-      const missingIsins = [];
-      for (const [etfId, qty] of holdings) {
-        if (qty <= 1e-8) continue;
-        const isin = isinById.get(etfId);
-        if (!isin) { missingPositions++; continue; }
-        const rows = quoteByIsin.get(isin) || [];
-        let cursor = quoteCursor.get(isin) || 0;
-        while (cursor < rows.length && rows[cursor].date <= cutoff) {
-          lastQuote.set(isin, rows[cursor]);
-          cursor++;
-        }
-        quoteCursor.set(isin, cursor);
-        const quoted = lastQuote.get(isin);
-        const tradePrice = latestTradePrices.get(etfId);
-        // If no historic quote exists, the known transaction price is a
-        // conservative provisional valuation, never a future market price.
-        const usableQuote = quoted && (!tradePrice || quoted.date >= tradePrice.date) ? quoted : null;
-        const valuation = usableQuote?.price ?? tradePrice?.price;
-        if (!Number.isFinite(valuation) || valuation <= 0) {
-          missingPositions++;
-          missingIsins.push(isin);
-          continue;
-        }
-        if (!usableQuote) estimatedPositions++;
-        marketValue += qty * valuation;
+      for(const [isin,rows] of byIsin) {
+        let cursor=cursors.get(isin)||0;
+        while(cursor<rows.length && rows[cursor].date<=date){latest.set(isin,rows[cursor]);cursor++;}
+        cursors.set(isin,cursor);
       }
-      const complete = missingPositions === 0;
-      if (!complete) incompleteMonths.push(month);
+      const evaluate = positions => {
+        let value=0,estimated=0,missing=0;
+        const missingIsins=[];
+        for(const [id,qty] of positions) {
+          if(qty<=1e-8)continue;
+          const isin=isinById.get(id);
+          if(!isin){missing++;continue;}
+          const quote=latest.get(isin),trade=lastTrades.get(id);
+          const usable=quote && (!trade || quote.date>=trade.date) ? quote : null;
+          const price=usable?.price ?? trade?.price;
+          if(!Number.isFinite(price)||price<=0){missing++;missingIsins.push(isin);continue;}
+          if(!usable)estimated++;
+          value+=qty*price;
+        }
+        return {value,estimated,missing,missingIsins};
+      };
+      const end=evaluate(holdings);
+      const complete=end.missing===0;
+      const value=complete?Number(end.value.toFixed(2)):null;
+      // Daily cash-flow-neutral chain-linking: estimate the value immediately
+      // before transactions at today's available prices. Excludes net deposits.
+      // Trade execution prices may differ from close; daily TWR is approximate.
+      const before=evaluate(previousHoldings);
+      if(previousValue!==null && previousValue>0 && before.missing===0 && before.value>0) {
+        twrIndex*=before.value/previousValue;
+      }
+      previousValue=value;
+      if(!complete)incompleteDays.push(date);
       points.push({
-        date: cutoff, month, marketValue: complete ? Number(marketValue.toFixed(2)) : null,
-        netContributions: Number(netContributions.toFixed(2)),
-        realizedTaxes: Number(realizedTaxes.toFixed(2)),
-        estimatedPositions, missingPositions, missingIsins,
-        valuation: !complete ? 'incomplete' : estimatedPositions ? 'partially_estimated' : 'market'
+        date,month:date.slice(0,7),marketValue:value,
+        netContributions:Number(netContributions.toFixed(2)),
+        dailyFlow:Number(dailyFlow.toFixed(2)),
+        realizedTaxes:Number(realizedTaxes.toFixed(2)),
+        performanceIndex:Number(twrIndex.toFixed(5)),
+        performancePercent:Number((twrIndex-100).toFixed(4)),
+        estimatedPositions:end.estimated,missingPositions:end.missing,missingIsins:end.missingIsins,
+        valuation:!complete?'incomplete':end.estimated?'partially_estimated':'market'
       });
-      month = nextMonth(month);
     }
-    res.set('Cache-Control', 'no-store');
-    res.json({ success: true, data: points, incompleteMonths });
-  } catch (error) { next(error); }
+    return res.set('Cache-Control','no-store').json({success:true,data:points,incompleteDays});
+  } catch(error){next(error);}
 };
 
 const getTodayDateStringForHistory = () => new Intl.DateTimeFormat('en-CA', {
