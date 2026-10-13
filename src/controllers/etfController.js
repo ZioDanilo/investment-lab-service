@@ -1,5 +1,4 @@
 const ETF = require('../models/ETF');
-const EtfCorrelation = require('../models/EtfCorrelation');
 const EtfMacroStatistics = require('../models/EtfMacroStatistics');
 const EtfQuotation = require('../models/EtfQuotation');
 const PortafoglioEtf = require('../models/PortafoglioEtf');
@@ -392,8 +391,6 @@ exports.deleteEtf = async (req, res, next) => {
 
     // Delete from all related tables
     await EtfMacroStatistics.destroy({ where: { isin }, transaction: t });
-    await EtfCorrelation.destroy({ where: { isin1: isin }, transaction: t });
-    await EtfCorrelation.destroy({ where: { isin2: isin }, transaction: t });
     await EtfQuotation.destroy({ where: { isin }, transaction: t });
     await etf.destroy({ transaction: t });
 
