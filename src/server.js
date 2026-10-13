@@ -3,7 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
-const { connectDB } = require('./config/database');
+const { connectDB, sequelize } = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
 const portfolioRoutes = require('./routes/portfolio');
 const etfRoutes = require('./routes/etf');
@@ -100,9 +100,30 @@ app.use(errorHandler);
 
 // Start Server
 const PORT = process.env.PORT || 3000;
+async function ensureTrendFollowingSchema() {
+  // Idempotent, additive schema bootstrap: no global sequelize.sync() or migrations.
+  await sequelize.query(`
+    CREATE TABLE IF NOT EXISTS public.portfolio_trend_strategies (
+      portfolio_id UUID PRIMARY KEY REFERENCES public.portafogli(id) ON DELETE CASCADE,
+      user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+      strategy_key VARCHAR(80) NOT NULL,
+      settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT portfolio_trend_strategies_settings_object CHECK (jsonb_typeof(settings) = 'object')
+    )
+  `);
+  await sequelize.query(`
+    CREATE INDEX IF NOT EXISTS idx_portfolio_trend_strategies_user
+    ON public.portfolio_trend_strategies(user_id)
+  `);
+  console.log('[Trend Following] Schema verificato.');
+}
+
 async function start() {
   const db = await connectDB();
   if (!db) throw new Error('Connessione al database non disponibile');
+  await ensureTrendFollowingSchema();
   app.listen(PORT, () => {
     console.log(`Investment Lab Service running on port ${PORT}`);
   });
