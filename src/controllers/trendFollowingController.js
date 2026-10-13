@@ -15,6 +15,21 @@ async function getOwnedPortfolio(req, res) {
   return portfolio;
 }
 
+exports.getEtfs = async (req, res, next) => {
+  try {
+    if (!await getOwnedPortfolio(req, res)) return;
+    const { sequelize } = require('../config/database');
+    const [rows] = await sequelize.query(`
+      SELECT e.isin, e.name, e.nickname, e.ticker
+      FROM public.real_portfolio_etf r
+      JOIN public.anagrafica_etf e ON e.id = r.etf_id
+      WHERE r.real_portfolio_id = :portfolioId AND r.quantity > 0
+      ORDER BY COALESCE(NULLIF(e.nickname, ''), e.name, e.isin)
+    `, { replacements: { portfolioId: req.params.portfolioId } });
+    res.json({ success: true, data: rows });
+  } catch (error) { next(error); }
+};
+
 exports.get = async (req, res, next) => {
   try {
     if (!await getOwnedPortfolio(req, res)) return;
