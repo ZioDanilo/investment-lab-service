@@ -128,6 +128,18 @@ async function ensureTrendFollowingSchema() {
       UNIQUE (portfolio_id, strategy_key, isin)
     )
   `);
+  // Import existing SMA200 selections once, without replacing newer slot records.
+  await sequelize.query(`
+    INSERT INTO public.portfolio_trend_etf_selections (portfolio_id, strategy_key, slot_index, isin)
+    SELECT pts.portfolio_id, 'sma-200', slots.ordinality::smallint - 1, slots.isin
+    FROM public.portfolio_trend_strategies pts
+    CROSS JOIN LATERAL jsonb_array_elements_text(
+      CASE WHEN jsonb_typeof(pts.settings->'etfIsins') = 'array' THEN pts.settings->'etfIsins' ELSE '[]'::jsonb END
+    ) WITH ORDINALITY AS slots(isin, ordinality)
+    JOIN public.anagrafica_etf e ON e.isin = slots.isin
+    WHERE pts.strategy_key = 'sma-200' AND slots.ordinality <= 3 AND slots.isin <> ''
+    ON CONFLICT DO NOTHING
+  `);
   console.log('[Trend Following] Schema verificato.');
 }
 
