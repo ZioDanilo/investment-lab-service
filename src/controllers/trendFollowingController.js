@@ -87,3 +87,52 @@ exports.put = async (req, res, next) => {
     res.json({ success: true, data: { portfolioId: row.portfolioId, strategyKey: row.strategyKey, settings: row.settings } });
   } catch (error) { next(error); }
 };
+
+exports.getEtfSelections = async (req, res, next) => {
+  try {
+    if (!await getOwnedPortfolio(req, res)) return;
+    if (!STRATEGIES.includes(req.params.strategyKey)) return res.status(400).json({ success: false, error: 'Strategia non valida' });
+    const { sequelize } = require('../config/database');
+    const [rows] = await sequelize.query(
+      'SELECT slot_index, isin FROM public.portfolio_trend_etf_selections WHERE portfolio_id = :portfolioId AND strategy_key = :strategyKey ORDER BY slot_index',
+      { replacements: { portfolioId: req.params.portfolioId, strategyKey: req.params.strategyKey } }
+    );
+    const etfIsins = ['', '', ''];
+    for (const row of rows) etfIsins[Number(row.slot_index)] = row.isin;
+    res.json({ success: true, data: { etfIsins } });
+  } catch (error) { next(error); }
+};
+
+exports.putEtfSelections = async (req, res, next) => {
+  try {
+    if (!await getOwnedPortfolio(req, res)) return;
+    const strategyKey = req.params.strategyKey;
+    const etfIsins = req.body?.etfIsins;
+    if (!STRATEGIES.includes(strategyKey) || !Array.isArray(etfIsins) || etfIsins.length !== 3 ||
+      etfIsins.some(isin => typeof isin !== 'string' || (isin && !/^[A-Z]{2}[A-Z0-9]{10}$/.test(isin)))) {
+      return res.status(400).json({ success: false, error: 'Selezioni ETF non valide' });
+    }
+    const chosen = etfIsins.filter(Boolean);
+    if (new Set(chosen).size !== chosen.length) return res.status(400).json({ success: false, error: 'ETF duplicati' });
+    const { sequelize } = require('../config/database');
+    if (chosen.length) {
+      const [rows] = await sequelize.query(
+        'SELECT DISTINCT e.isin FROM public.real_portfolio_etf r JOIN public.anagrafica_etf e ON e.id = r.etf_id WHERE r.real_portfolio_id = :portfolioId AND r.quantity > 0 AND e.isin IN (:isins)',
+        { replacements: { portfolioId: req.params.portfolioId, isins: chosen } }
+      );
+      if (rows.length !== chosen.length) return res.status(400).json({ success: false, error: 'ETF non presente nel portafoglio' });
+    }
+    await sequelize.transaction(async transaction => {
+      await sequelize.query('DELETE FROM public.portfolio_trend_etf_selections WHERE portfolio_id = :portfolioId AND strategy_key = :strategyKey',
+        { replacements: { portfolioId: req.params.portfolioId, strategyKey }, transaction });
+      for (let i = 0; i < etfIsins.length; i++) {
+        if (!etfIsins[i]) continue;
+        await sequelize.query(
+          'INSERT INTO public.portfolio_trend_etf_selections (portfolio_id, strategy_key, slot_index, isin) VALUES (:portfolioId, :strategyKey, :slotIndex, :isin)',
+          { replacements: { portfolioId: req.params.portfolioId, strategyKey, slotIndex: i, isin: etfIsins[i] }, transaction }
+        );
+      }
+    });
+    res.json({ success: true, data: { etfIsins } });
+  } catch (error) { next(error); }
+};
