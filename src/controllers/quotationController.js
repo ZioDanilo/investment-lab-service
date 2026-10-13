@@ -504,3 +504,111 @@ exports.refreshRealPortfolioQuotations = async (req, res, next) => {
     res.status(200).json({ success: true, data: result, date: today });
   } catch (error) { next(error); }
 };
+
+
+// Yahoo Finance is the sole provider for every explicit quotation refresh.
+// Always contact Yahoo, including when today's quotation is already stored.
+const yahooRefreshDate = (seconds, zone = 'Europe/Rome') => {
+  const parts = new Intl.DateTimeFormat('en-GB', {timeZone: zone, year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(new Date(seconds * 1000));
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return values.year + '-' + values.month + '-' + values.day;
+};
+const yahooSymbol = etf => {
+  const ticker = String(etf.ticker || '').trim().toUpperCase();
+  const market = String(etf.marketCode || '').trim().toUpperCase();
+  if (!/^[A-Z0-9^._=-]{1,40}$/.test(ticker) || !/^[A-Z]{1,10}$/.test(market)) throw new Error('Ticker o market_code Yahoo non valido');
+  return ticker.endsWith('.' + market) ? ticker : ticker.replace(/\\.[A-Z]{1,10}$/, '') + '.' + market;
+};
+const refreshYahooEtf = async etf => {
+  const symbol = yahooSymbol(etf);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let payload;
+  try {
+    const response = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=10d&interval=1d', {
+      signal: controller.signal,
+      headers: {'User-Agent':'Mozilla/5.0', Accept:'application/json'}
+    });
+    if (!response.ok) throw new Error('Yahoo HTTP ' + response.status);
+    payload = await response.json();
+  } finally { clearTimeout(timer); }
+  const chart = payload?.chart?.result?.[0];
+  if (!chart || String(chart.meta?.symbol || '').toUpperCase() !== symbol) throw new Error('Simbolo Yahoo non coerente: ' + symbol);
+  const zone = chart.meta?.exchangeTimezoneName || 'Europe/Rome';
+  const now = Math.floor(Date.now()/1000);
+  const today = yahooRefreshDate(now, zone);
+  const timestamps = chart.timestamp || [];
+  const quotes = chart.indicators?.quote?.[0] || {};
+  const end = chart.meta?.currentTradingPeriod?.regular?.end;
+  const unfinished = !Number.isFinite(end) || now < end;
+  let chosen = null;
+  for (let i = 0; i < timestamps.length; i++) {
+    if (!Number.isFinite(timestamps[i]) || timestamps[i] > now) continue;
+    const date = yahooRefreshDate(timestamps[i], zone);
+    const close = quotes.close?.[i];
+    const opening = quotes.open?.[i];
+    const current = chart.meta?.regularMarketPrice;
+    const price = date === today && unfinished
+      ? (Number.isFinite(current) && current > 0 ? current : opening)
+      : close;
+    if (!Number.isFinite(price) || price <= 0) continue;
+    if (!chosen || date > chosen.date) chosen = {date, price};
+  }
+  if (!chosen) throw new Error('Yahoo non ha restituito una quotazione valida per ' + symbol);
+  // Updating the latest available session is deliberate: today's live price is
+  // replaced on each click, while historical rows are not touched.
+  await EtfQuotation.upsert({
+    isin: etf.isin, date: chosen.date, quotation: chosen.price, source: 'yahoo_chart'
+  }, {conflictFields:['isin','date']});
+  return {isin:etf.isin, name:etf.name, ticker:etf.ticker, symbol, quotation:chosen.price, date:chosen.date, variation:'-'};
+};
+
+exports.refreshSingleQuotation = async (req,res,next) => {
+  try {
+    const isin = String(req.params?.isin || req.query?.isin || req.body?.isin || '').trim().toUpperCase();
+    if (!isin) return res.status(400).json({success:false,error:'ISIN obbligatorio'});
+    const etf = await ETF.findOne({where:{isin},attributes:['isin','name','ticker','marketCode']});
+    if (!etf) return res.status(404).json({success:false,error:'ETF non trovato'});
+    const data = await refreshYahooEtf(etf);
+    return res.set('Cache-Control','no-store').json({success:true,data,date:data.date,cached:false});
+  } catch(error) { return res.status(502).json({success:false,error:String(error.message || error)}); }
+};
+
+exports.refreshRealPortfolioQuotations = async (req,res,next) => {
+  try {
+    const portfolio = await Portafoglio.findOne({where:{id:req.params.portfolioId,userId:req.user.id,tipo:'reale',status:'open'}});
+    if (!portfolio) return res.status(404).json({success:false,error:'Portafoglio reale non trovato'});
+    const positions = await RealPortfolioEtf.findAll({
+      where:{realPortfolioId:portfolio.id},
+      include:[{model:ETF,as:'etf',attributes:['isin','name','nickname','ticker','marketCode']}]
+    });
+    const unique = [...new Map(positions.map(p=>p.etf).filter(Boolean).map(e=>[e.isin,e])).values()];
+    const data = [], failures = [];
+    for (const etf of unique) {
+      try {
+        const updated = await refreshYahooEtf(etf);
+        data.push({...updated,nickname:etf.nickname,diagnostic:{provider:'Yahoo Finance',symbol:updated.symbol,fetchStatus:'updated',providerCalled:true,providerCalledThisRequest:true,providerDate:updated.date,providerPrice:updated.quotation}});
+      } catch(error) {
+        const latest = await getLatestStoredQuotation(etf.isin);
+        const message = String(error.message || error);
+        failures.push({isin:etf.isin,error:message});
+        data.push({isin:etf.isin,name:etf.name,nickname:etf.nickname,ticker:etf.ticker,quotation:latest?.quotation == null ? null : Number(latest.quotation),date:latest?.date || null,diagnostic:{provider:'Yahoo Finance',fetchStatus:'error',providerCalled:true,providerCalledThisRequest:true,error:message}});
+      }
+    }
+    return res.set('Cache-Control','no-store').json({success:failures.length===0,data,date:yahooRefreshDate(Math.floor(Date.now()/1000)),failures});
+  } catch(error) { next(error); }
+};
+
+exports.getDailyQuotations = async (req,res,next) => {
+  try {
+    const etfs = await ETF.findAll({attributes:['isin','name','ticker','marketCode']});
+    const failures = [];
+    for (const etf of etfs) {
+      try { await refreshYahooEtf(etf); }
+      catch(error) { failures.push({isin:etf.isin,error:String(error.message || error)}); }
+    }
+    // Preserve the existing daily quotation response contract.
+    return fetchQuotationsWithVariation(res,yahooRefreshDate(Math.floor(Date.now()/1000)));
+  } catch(error) { next(error); }
+};
+exports.forceRefreshQuotations = exports.getDailyQuotations;

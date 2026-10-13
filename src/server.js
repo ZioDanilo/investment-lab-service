@@ -16,6 +16,8 @@ const authRoutes = require('./routes/auth');
 const factorEngineRoutes = require('./routes/factorEngine');
 const giocatoriRoutes = require('./routes/giocatori');
 
+const yahooFinanceRoutes = require('./routes/yahooFinance');
+
 const app = express();
 
 // La connessione al database viene completata prima di accettare richieste.
@@ -71,6 +73,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
+app.use('/api/yahoo-finance', yahooFinanceRoutes);
 app.use('/api/giocatori', giocatoriRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/portfolio', portfolioRoutes);
