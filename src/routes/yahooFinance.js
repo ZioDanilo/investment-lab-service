@@ -60,61 +60,105 @@ router.get('/diagnostic', async (req, res) => {
 
 const { sequelize } = require('../config/database');
 const ETF = require('../models/ETF');
-const IMPORT_ISIN = 'LU3307218399';
-const IMPORT_SYMBOL = 'EEAU.DE';
-const localDate = seconds => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+
+const localDate = (seconds, timeZone = 'Europe/Berlin') => new Intl.DateTimeFormat('en-CA', {
+  timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
 }).format(new Date(seconds * 1000));
 const validPrice = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
+const exchangeSuffix = exchange => ({
+  XETRA: 'DE', XETR: 'DE', GER: 'DE', DE: 'DE',
+  MIL: 'MI', MILAN: 'MI', BIT: 'MI', MI: 'MI',
+  AMS: 'AS', EURONEXT_AMSTERDAM: 'AS', AS: 'AS',
+  PAR: 'PA', EURONEXT_PARIS: 'PA', PA: 'PA',
+  LSE: 'L', LON: 'L', L: 'L',
+  SWX: 'SW', SIX: 'SW', SW: 'SW'
+})[String(exchange || '').trim().toUpperCase()] || null;
+const resolveSymbol = etf => {
+  const ticker = String(etf.eodhdCode || etf.ticker || '').trim().toUpperCase();
+  const exchange = String(etf.eodhdExchange || '').trim();
+  if (!ticker || !allowed.test(ticker)) return null;
+  const suffix = exchangeSuffix(exchange);
+  if (!suffix) return null;
+  // Provider suffixes are not interchangeable: always use the exchange mapping.
+  const base = ticker.replace(/\\.[A-Z]{1,5}$/, '');
+  return base + '.' + suffix;
+};
 
-// Historical import: inserts missing dates only, preserving all existing prices.
-router.post('/import-eeau', async (req, res) => {
+router.post('/update-quotations', async (req, res) => {
   try {
-    const etf = await ETF.findOne({ where: { isin: IMPORT_ISIN }, attributes: ['isin'], raw: true });
-    if (!etf) return res.status(404).json({ success: false, error: 'ISIN ' + IMPORT_ISIN + ' assente in anagrafica_etf' });
-    const response = await yahoo('/v8/finance/chart/' + IMPORT_SYMBOL + '?range=2y&interval=1d');
-    if (response.error) return res.status(502).json({ success: false, error: 'Yahoo Finance unavailable', details: response.error });
-    const chart = response.chart?.result?.[0];
-    if (!chart || chart.meta?.symbol !== IMPORT_SYMBOL || chart.meta?.currency !== 'EUR') {
-      return res.status(502).json({ success: false, error: 'Ticker o valuta Yahoo non coerenti' });
-    }
-    const timestamps = chart.timestamp || [];
-    const quotes = chart.indicators?.quote?.[0] || {};
     const now = Math.floor(Date.now() / 1000);
     const today = localDate(now);
-    const end = chart.meta?.currentTradingPeriod?.regular?.end;
-    const sessionOpen = !Number.isFinite(end) || now < end;
-    const prices = new Map();
-    let skipped = 0;
-    for (let i = 0; i < timestamps.length; i++) {
-      const timestamp = timestamps[i];
-      if (!Number.isFinite(timestamp) || timestamp > now) { skipped++; continue; }
-      const date = localDate(timestamp);
-      const unfinished = date === today && sessionOpen;
-      const close = quotes.close?.[i];
-      const opening = quotes.open?.[i];
-      const current = chart.meta?.regularMarketPrice;
-      const price = unfinished ? (validPrice(current) ? current : opening) : close;
-      if (!validPrice(price)) { skipped++; continue; }
-      prices.set(date, { date, quotation: price });
-    }
-    const rows = [...prices.values()];
-    if (!rows.length) return res.json({ success: true, isin: IMPORT_ISIN, symbol: IMPORT_SYMBOL, received: timestamps.length, eligible: 0, inserted: 0, existing: 0, skipped });
-    const [inserted] = await sequelize.query(`
-      INSERT INTO etf_quotations (id, isin, date, quotation, source, "createdAt", "updatedAt")
-      SELECT gen_random_uuid(), :isin, r.date, r.quotation, 'yahoo_chart', NOW(), NOW()
-      FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS r(date date, quotation numeric)
-      ON CONFLICT (isin, date) DO NOTHING
-      RETURNING date
-    `, { replacements: { isin: IMPORT_ISIN, rows: JSON.stringify(rows) } });
-    return res.set('Cache-Control', 'no-store').json({
-      success: true, isin: IMPORT_ISIN, symbol: IMPORT_SYMBOL,
-      received: timestamps.length, eligible: rows.length, inserted: inserted.length,
-      existing: rows.length - inserted.length, skipped, sessionOpen
+    const etfs = await ETF.findAll({
+      attributes: ['isin', 'ticker', 'eodhdCode', 'eodhdExchange'],
+      raw: true
     });
+    const [existingToday] = await sequelize.query(
+      'SELECT isin FROM etf_quotations WHERE date = :today AND quotation IS NOT NULL',
+      { replacements: { today } }
+    );
+    const covered = new Set(existingToday.map(row => row.isin));
+    const missing = etfs.filter(etf => !covered.has(etf.isin));
+    const report = {
+      success: true, date: today, totalEtfs: etfs.length, alreadyUpdatedToday: covered.size,
+      toUpdate: missing.length, processed: 0, inserted: 0, existing: 0, skippedPrices: 0,
+      skippedMappings: [], failures: [], results: []
+    };
+    for (const etf of missing) {
+      const symbol = resolveSymbol(etf);
+      if (!symbol) {
+        report.skippedMappings.push({ isin: etf.isin, ticker: etf.ticker, exchange: etf.eodhdExchange, reason: 'Ticker o mercato non supportato' });
+        continue;
+      }
+      try {
+        const response = await yahoo('/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=2y&interval=1d');
+        if (response.error) throw new Error('Yahoo HTTP ' + response.error.status);
+        const chart = response.chart?.result?.[0];
+        if (!chart || chart.meta?.symbol?.toUpperCase() !== symbol) throw new Error('Risposta Yahoo non coerente con ' + symbol);
+        const timestamps = chart.timestamp || [];
+        const quotes = chart.indicators?.quote?.[0] || {};
+        const zone = chart.meta?.exchangeTimezoneName || 'Europe/Berlin';
+        const exchangeToday = localDate(now, zone);
+        const marketEnd = chart.meta?.currentTradingPeriod?.regular?.end;
+        const sessionUnfinished = !Number.isFinite(marketEnd) || now < marketEnd;
+        const rowsByDate = new Map();
+        let skipped = 0;
+        for (let i = 0; i < timestamps.length; i++) {
+          const timestamp = timestamps[i];
+          if (!Number.isFinite(timestamp) || timestamp > now) { skipped++; continue; }
+          const date = localDate(timestamp, zone);
+          const unfinished = date === exchangeToday && sessionUnfinished;
+          const close = quotes.close?.[i];
+          const opening = quotes.open?.[i];
+          const current = chart.meta?.regularMarketPrice;
+          const quotation = unfinished ? (validPrice(current) ? current : opening) : close;
+          if (!validPrice(quotation)) { skipped++; continue; }
+          rowsByDate.set(date, { date, quotation });
+        }
+        const rows = [...rowsByDate.values()];
+        let insertedCount = 0;
+        if (rows.length) {
+          const [inserted] = await sequelize.query(`
+            INSERT INTO etf_quotations (id, isin, date, quotation, source, "createdAt", "updatedAt")
+            SELECT gen_random_uuid(), :isin, r.date, r.quotation, 'yahoo_chart', NOW(), NOW()
+            FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS r(date date, quotation numeric)
+            ON CONFLICT (isin, date) DO NOTHING
+            RETURNING date
+          `, { replacements: { isin: etf.isin, rows: JSON.stringify(rows) } });
+          insertedCount = inserted.length;
+        }
+        report.processed++;
+        report.inserted += insertedCount;
+        report.existing += rows.length - insertedCount;
+        report.skippedPrices += skipped;
+        report.results.push({ isin: etf.isin, symbol, received: timestamps.length, inserted: insertedCount, existing: rows.length - insertedCount, skipped });
+      } catch (error) {
+        report.failures.push({ isin: etf.isin, symbol, error: String(error.message || error) });
+      }
+    }
+    return res.set('Cache-Control', 'no-store').json(report);
   } catch (error) {
-    console.error('[Yahoo Finance historical import]', error);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error('[Yahoo bulk quotations]', error);
+    return res.status(500).json({ success: false, error: String(error.message || error) });
   }
 });
 
