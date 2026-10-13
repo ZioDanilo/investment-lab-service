@@ -171,6 +171,13 @@ const connectDB = async () => {
     await sequelize.authenticate();
     console.log('PostgreSQL Connected:', process.env.DATABASE_URL.split('@')[1]);
 
+    // Schema migrations belong to a dedicated maintenance operation, not every API boot.
+    // Opt in explicitly only when performing a controlled migration.
+    if (process.env.RUN_SCHEMA_MIGRATIONS !== 'true') {
+      console.log('Database authenticated; schema migrations skipped (RUN_SCHEMA_MIGRATIONS != true)');
+      return sequelize;
+    }
+
     // Import models
     const EtfQuotation = require('../models/EtfQuotation');
     const StructuralProbability = require('../models/StructuralProbability');
