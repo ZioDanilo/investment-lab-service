@@ -51,13 +51,14 @@ async function updateEtf(etf,{historical=false}={}) {
     'SELECT date,quotation FROM etf_quotations WHERE isin=:isin AND quotation>0 ORDER BY date',
     {replacements:{isin:etf.isin}});
   const known=new Map(stored.map(r=>[String(r.date).slice(0,10),Number(r.quotation)]));
-  const globalBaseline=median([...known.values()])??median(candidates.map(r=>r.quotation));
+  // Use Yahoo's own local history as the primary reference: existing DB
+  // rows may be the very outliers we are trying to repair.
   const rejected=[],accepted=[];
-  for(const row of candidates){
-    const near=[...known.entries()].sort((a,b)=>
-      Math.abs(Date.parse(a[0])-Date.parse(row.date))-Math.abs(Date.parse(b[0])-Date.parse(row.date)))
-      .slice(0,10).map(x=>x[1]);
-    const reference=median(near)??globalBaseline;
+  for(let i=0;i<candidates.length;i++){
+    const row=candidates[i];
+    const nearby=candidates.slice(Math.max(0,i-10),Math.min(candidates.length,i+11))
+      .filter(x=>x.date!==row.date).map(x=>x.quotation);
+    const reference=median(nearby)??median(candidates.map(x=>x.quotation));
     if(reference&&(row.quotation/reference>3||row.quotation/reference<1/3)){
       rejected.push({isin:etf.isin,symbol,date:row.date,quotation:row.quotation,reference,
         reason:'extreme_price_ratio_requires_review',possibleCorporateAction:Boolean(Object.keys(chart.events?.splits||{}).length)});
@@ -67,7 +68,10 @@ async function updateEtf(etf,{historical=false}={}) {
   // Historical values are inserted only when absent. The latest market session
   // is refreshed on each explicit request without a separate DELETE.
   const latest=candidates.at(-1)?.date;
-  const [written]=accepted.length?await sequelize.query(`
+  // Only send missing dates plus the latest trading date to PostgreSQL.
+  // This avoids hundreds of unnecessary ON CONFLICT operations per ETF.
+  const toWrite=accepted.filter(r=>!known.has(r.date)||r.date===latest);
+  const [written]=toWrite.length?await sequelize.query(`
     INSERT INTO etf_quotations (id,isin,date,quotation,source,"createdAt","updatedAt")
     SELECT gen_random_uuid(),:isin,r.date,r.quotation,'yahoo_chart',NOW(),NOW()
     FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS r(date date,quotation numeric)
@@ -75,7 +79,7 @@ async function updateEtf(etf,{historical=false}={}) {
     SET quotation=EXCLUDED.quotation,source=EXCLUDED.source,"updatedAt"=NOW()
     WHERE etf_quotations.date=:latest
     RETURNING date,quotation,(xmax=0) AS was_inserted
-  `,{replacements:{isin:etf.isin,rows:JSON.stringify(accepted),latest}}):[[]];
+  `,{replacements:{isin:etf.isin,rows:JSON.stringify(toWrite),latest}}):[[]];
   const current=written.find(r=>String(r.date).slice(0,10)===latest)||
     (accepted.length?accepted[accepted.length-1]:null);
   return {isin:etf.isin,name:etf.name,ticker:etf.ticker,symbol,
