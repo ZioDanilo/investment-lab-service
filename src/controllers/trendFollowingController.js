@@ -1,6 +1,5 @@
 const Portafoglio = require('../models/Portafoglio');
 const PortfolioTrendStrategy = require('../models/PortfolioTrendStrategy');
-const { Op } = require('sequelize');
 
 const STRATEGIES = [
   'buy-hold-momentum', 'sma-200', 'ts-momentum-12m',
@@ -32,7 +31,7 @@ exports.put = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Strategia o impostazioni non valide' });
     }
     let cleanSettings = {};
-    if (strategyKey === 'sma-200') {
+    if (Object.prototype.hasOwnProperty.call(settings, 'etfIsins')) {
       if (!Array.isArray(settings.etfIsins) || settings.etfIsins.length !== 3) {
         return res.status(400).json({ success: false, error: 'Servono tre slot ETF, anche vuoti' });
       }
@@ -60,8 +59,9 @@ exports.put = async (req, res, next) => {
         }
       }
       cleanSettings = { etfIsins };
+    } else if (strategyKey === 'sma-200') {
+      return res.status(400).json({ success: false, error: 'Slot SMA200 mancanti' });
     } else {
-      // Keep strategy-specific configuration extensible for future implementations.
       cleanSettings = settings;
     }
     const [row] = await PortfolioTrendStrategy.findOrCreate({
