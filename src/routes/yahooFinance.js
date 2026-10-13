@@ -57,4 +57,65 @@ router.get('/diagnostic', async (req, res) => {
     raw, errors: Object.fromEntries(Object.entries(raw).filter(([, v]) => v?.error || v?.chart?.error || v?.quoteSummary?.error).map(([k,v])=>[k,v.error || v.chart?.error || v.quoteSummary?.error]))
   });
 });
+
+const { sequelize } = require('../config/database');
+const ETF = require('../models/ETF');
+const IMPORT_ISIN = 'IE00BL25JP72';
+const IMPORT_SYMBOL = 'XDEM.DE';
+const localDate = seconds => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit'
+}).format(new Date(seconds * 1000));
+const validPrice = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+// Historical import: inserts missing dates only, preserving all existing prices.
+router.post('/import-xdem', async (req, res) => {
+  try {
+    const etf = await ETF.findOne({ where: { isin: IMPORT_ISIN }, attributes: ['isin'], raw: true });
+    if (!etf) return res.status(404).json({ success: false, error: 'ISIN ' + IMPORT_ISIN + ' assente in anagrafica_etf' });
+    const response = await yahoo('/v8/finance/chart/' + IMPORT_SYMBOL + '?range=2y&interval=1d');
+    if (response.error) return res.status(502).json({ success: false, error: 'Yahoo Finance unavailable', details: response.error });
+    const chart = response.chart?.result?.[0];
+    if (!chart || chart.meta?.symbol !== IMPORT_SYMBOL || chart.meta?.currency !== 'EUR') {
+      return res.status(502).json({ success: false, error: 'Ticker o valuta Yahoo non coerenti' });
+    }
+    const timestamps = chart.timestamp || [];
+    const quotes = chart.indicators?.quote?.[0] || {};
+    const now = Math.floor(Date.now() / 1000);
+    const today = localDate(now);
+    const end = chart.meta?.currentTradingPeriod?.regular?.end;
+    const sessionOpen = !Number.isFinite(end) || now < end;
+    const prices = new Map();
+    let skipped = 0;
+    for (let i = 0; i < timestamps.length; i++) {
+      const timestamp = timestamps[i];
+      if (!Number.isFinite(timestamp) || timestamp > now) { skipped++; continue; }
+      const date = localDate(timestamp);
+      const unfinished = date === today && sessionOpen;
+      const close = quotes.close?.[i];
+      const opening = quotes.open?.[i];
+      const current = chart.meta?.regularMarketPrice;
+      const price = unfinished ? (validPrice(current) ? current : opening) : close;
+      if (!validPrice(price)) { skipped++; continue; }
+      prices.set(date, { date, quotation: price });
+    }
+    const rows = [...prices.values()];
+    if (!rows.length) return res.json({ success: true, isin: IMPORT_ISIN, symbol: IMPORT_SYMBOL, received: timestamps.length, eligible: 0, inserted: 0, existing: 0, skipped });
+    const [inserted] = await sequelize.query(`
+      INSERT INTO etf_quotations (id, isin, date, quotation, source, "createdAt", "updatedAt")
+      SELECT gen_random_uuid(), :isin, r.date, r.quotation, 'yahoo_chart', NOW(), NOW()
+      FROM jsonb_to_recordset(CAST(:rows AS jsonb)) AS r(date date, quotation numeric)
+      ON CONFLICT (isin, date) DO NOTHING
+      RETURNING date
+    `, { replacements: { isin: IMPORT_ISIN, rows: JSON.stringify(rows) } });
+    return res.set('Cache-Control', 'no-store').json({
+      success: true, isin: IMPORT_ISIN, symbol: IMPORT_SYMBOL,
+      received: timestamps.length, eligible: rows.length, inserted: inserted.length,
+      existing: rows.length - inserted.length, skipped, sessionOpen
+    });
+  } catch (error) {
+    console.error('[Yahoo Finance historical import]', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 module.exports = router;
