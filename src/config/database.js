@@ -33,9 +33,6 @@ const initializeAssociations = () => {
   const Portafoglio = require('../models/Portafoglio');
   const PortafoglioEtf = require('../models/PortafoglioEtf');
   const EtfMacroStatistics = require('../models/EtfMacroStatistics');
-  const MarketUniverseRun = require('../models/MarketUniverseRun');
-  const MarketUniverseMonth = require('../models/MarketUniverseMonth');
-  const MarketUniverseBinaryChunk = require('../models/MarketUniverseBinaryChunk');
   const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
   const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
@@ -164,36 +161,6 @@ const initializeAssociations = () => {
     });
   }
 
-  if (!MarketUniverseRun.associations.months) {
-    MarketUniverseRun.hasMany(MarketUniverseMonth, {
-      foreignKey: 'runId',
-      as: 'months',
-      onDelete: 'CASCADE'
-    });
-  }
-
-  if (!MarketUniverseMonth.associations.marketUniverseRun) {
-    MarketUniverseMonth.belongsTo(MarketUniverseRun, {
-      foreignKey: 'runId',
-      targetKey: 'runId'
-    });
-  }
-
-  if (!MarketUniverseRun.associations.binaryChunks) {
-    MarketUniverseRun.hasMany(MarketUniverseBinaryChunk, {
-      foreignKey: 'runId',
-      as: 'binaryChunks',
-      onDelete: 'CASCADE'
-    });
-  }
-
-  if (!MarketUniverseBinaryChunk.associations.marketUniverseRun) {
-    MarketUniverseBinaryChunk.belongsTo(MarketUniverseRun, {
-      foreignKey: 'runId',
-      targetKey: 'runId'
-    });
-  }
-
   if (!MarketUniverseRunV2.associations.etfs) MarketUniverseRunV2.hasMany(MarketUniverseEtfV2, { foreignKey: 'runId', as: 'etfs', onDelete: 'CASCADE' });
   if (!MarketUniverseEtfV2.associations.run) MarketUniverseEtfV2.belongsTo(MarketUniverseRunV2, { foreignKey: 'runId', targetKey: 'runId', as: 'run' });
 };
@@ -205,7 +172,6 @@ const connectDB = async () => {
     console.log('PostgreSQL Connected:', process.env.DATABASE_URL.split('@')[1]);
 
     // Import models
-    const EtfCorrelation = require('../models/EtfCorrelation');
     const EtfQuotation = require('../models/EtfQuotation');
     const StructuralProbability = require('../models/StructuralProbability');
     const TransitionMatrix = require('../models/TransitionMatrix');
@@ -313,7 +279,6 @@ const connectDB = async () => {
       console.warn('Server continues with existing schema. Run manual migration if needed.');
     }
 
-    void EtfCorrelation;
     void EtfQuotation;
     void StructuralProbability;
     void TransitionMatrix;
