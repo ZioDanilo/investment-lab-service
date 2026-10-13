@@ -86,10 +86,21 @@ async function updateEtf(etf,{historical=false}={}) {
 async function updateAll({historical=false,etfs=null}={}){
   const targets=etfs||await ETF.findAll({attributes:['isin','name','ticker','marketCode'],raw:true});
   const results=[],failures=[],rejectedPrices=[];
-  for(const etf of targets){
-    try{const result=await updateEtf(etf,{historical});results.push(result);rejectedPrices.push(...result.rejected);}
-    catch(error){failures.push({isin:etf.isin,error:String(error.message||error)});}
-  }
+  // Bounded concurrency: avoid one slow Yahoo request blocking all ETFs.
+  const concurrency=4;
+  let cursor=0;
+  await Promise.all(Array.from({length:Math.min(concurrency,targets.length)},async()=>{
+    while(cursor<targets.length){
+      const etf=targets[cursor++];
+      try{
+        const result=await updateEtf(etf,{historical});
+        results.push(result);
+        rejectedPrices.push(...result.rejected);
+      }catch(error){
+        failures.push({isin:etf.isin,error:String(error.message||error)});
+      }
+    }
+  }));
   return {success:failures.length===0,totalEtfs:targets.length,processed:results.length,
     inserted:results.reduce((n,r)=>n+r.inserted,0),updatedToday:results.reduce((n,r)=>n+r.updated,0),
     existing:results.reduce((n,r)=>n+r.existing,0),skippedPrices:results.reduce((n,r)=>n+r.skipped,0),
