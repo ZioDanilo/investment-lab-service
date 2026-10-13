@@ -24,7 +24,7 @@ exports.login = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      data: { id: user.id, username: user.username }
+      data: { id: user.id, username: user.username, role: user.role === 'ADMIN' ? 'ADMIN' : 'GUEST' }
     });
   } catch (error) {
     next(error);
@@ -54,11 +54,11 @@ exports.register = async (req, res, next) => {
       return res.status(409).json({ success: false, error: 'Username già esistente' });
     }
 
-    const user = await User.create({ username, password });
+    const user = await User.create({ username, password, role: 'GUEST' });
 
     return res.status(201).json({
       success: true,
-      data: { id: user.id, username: user.username }
+      data: { id: user.id, username: user.username, role: user.role === 'ADMIN' ? 'ADMIN' : 'GUEST' }
     });
   } catch (error) {
     // Protect against races between two simultaneous registrations.
