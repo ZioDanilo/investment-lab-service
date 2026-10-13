@@ -65,23 +65,12 @@ const localDate = (seconds, timeZone = 'Europe/Berlin') => new Intl.DateTimeForm
   timeZone, year: 'numeric', month: '2-digit', day: '2-digit'
 }).format(new Date(seconds * 1000));
 const validPrice = value => typeof value === 'number' && Number.isFinite(value) && value > 0;
-const exchangeSuffix = exchange => ({
-  XETRA: 'DE', XETR: 'DE', GER: 'DE', DE: 'DE',
-  MIL: 'MI', MILAN: 'MI', BIT: 'MI', MI: 'MI',
-  AMS: 'AS', EURONEXT_AMSTERDAM: 'AS', AS: 'AS',
-  PAR: 'PA', EURONEXT_PARIS: 'PA', PA: 'PA',
-  LSE: 'L', LON: 'L', L: 'L',
-  SWX: 'SW', SIX: 'SW', SW: 'SW'
-})[String(exchange || '').trim().toUpperCase()] || null;
 const resolveSymbol = etf => {
-  const ticker = String(etf.eodhdCode || etf.ticker || '').trim().toUpperCase();
-  const exchange = String(etf.eodhdExchange || '').trim();
-  if (!ticker || !allowed.test(ticker)) return null;
-  const suffix = exchangeSuffix(exchange);
-  if (!suffix) return null;
-  // Provider suffixes are not interchangeable: always use the exchange mapping.
-  const base = ticker.replace(/\\.[A-Z]{1,5}$/, '');
-  return base + '.' + suffix;
+  const ticker = String(etf.ticker || '').trim().toUpperCase();
+  const marketCode = String(etf.marketCode || '').trim().toUpperCase();
+  if (!ticker || !allowed.test(ticker) || !/^[A-Z]{1,10}$/.test(marketCode)) return null;
+  const suffix = '.' + marketCode;
+  return ticker.endsWith(suffix) ? ticker : ticker.replace(/\\.[A-Z]{1,10}$/, '') + suffix;
 };
 
 router.post('/update-quotations', async (req, res) => {
@@ -89,7 +78,7 @@ router.post('/update-quotations', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
     const today = localDate(now);
     const etfs = await ETF.findAll({
-      attributes: ['isin', 'ticker', 'eodhdCode', 'eodhdExchange'],
+      attributes: ['isin', 'ticker', 'marketCode'],
       raw: true
     });
     const [existingToday] = await sequelize.query(
@@ -106,7 +95,7 @@ router.post('/update-quotations', async (req, res) => {
     for (const etf of missing) {
       const symbol = resolveSymbol(etf);
       if (!symbol) {
-        report.skippedMappings.push({ isin: etf.isin, ticker: etf.ticker, exchange: etf.eodhdExchange, reason: 'Ticker o mercato non supportato' });
+        report.skippedMappings.push({ isin: etf.isin, ticker: etf.ticker, marketCode: etf.marketCode, reason: 'Ticker o market_code assente/non valido' });
         continue;
       }
       try {
