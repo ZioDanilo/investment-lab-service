@@ -214,6 +214,9 @@ const connectDB = async () => {
       console.warn('Real portfolio accounting cleanup warning:', accountingMigrationError.message);
     }
 
+    // Yahoo market suffix is independent of legacy EODHD mapping.
+    await sequelize.query('ALTER TABLE anagrafica_etf ADD COLUMN IF NOT EXISTS market_code VARCHAR(10)');
+    
     // Persist the EODHD symbol resolved once from the ISIN. This avoids spending
     // one Search API call on every daily quotation refresh.
     try {
