@@ -100,11 +100,17 @@ async function diagnoseEtf(isin) {
       if (!vector || !a.n) {
         downside[key] = { worst5: null, worst10: null, equityBelowMinus5: null };
         return [key, { overall: null, equityWorst5: null, equityWorst10: null, observationsWorst5: 0, observationsWorst10: 0 }];
+      }
       // The tail is defined by the comparator equity ETF, not by Managed Futures.
       // Deterministic rank selection handles ties and keeps exactly floor(n * fraction) observations.
       const sorted = [...a.indices].sort((i, j) => vector[i] - vector[j] || i - j);
       const n5 = Math.max(1, Math.floor(sorted.length * 0.05));
       const n10 = Math.max(1, Math.floor(sorted.length * 0.10));
+      downside[key] = {
+        worst5: tailMetrics(sorted.slice(0, n5), vector),
+        worst10: tailMetrics(sorted.slice(0, n10), vector),
+        equityBelowMinus5: tailMetrics(a.indices.filter(i => vector[i] <= -0.05), vector)
+      };
       return [key, {
         overall: correlation(a.indices, vector),
         equityWorst5: correlation(sorted.slice(0, n5), vector),
@@ -122,7 +128,7 @@ async function diagnoseEtf(isin) {
       negativeMonthsPct: a.n ? a.negative / a.n * 100 : null,
       monthlyP5: percentile(a.values, 0.05),
       qualityCorrelation: correlations.quality.overall,
-      correlations
+      correlations, downside
     };
   });
 
