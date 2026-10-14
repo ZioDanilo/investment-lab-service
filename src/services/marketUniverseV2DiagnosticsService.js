@@ -113,6 +113,44 @@ async function diagnoseEtf(isin) {
   const persistence = Object.fromEntries(
     Object.entries(comparators).map(([key, equity]) => [key, persistenceMetrics(equity)])
   );
+  function rollingMetrics(equity) {
+    if (!equity) return null;
+    const lengths = [3, 6, 12], months = Number(run.monthCount);
+    const data = Object.fromEntries(lengths.map(h => [h, SCENARIOS.map(() => ({
+      negative: { n: 0, eq: 0, mf: 0, benefit: 0, mfNeg: 0 },
+      persistent: { n: 0, eq: 0, mf: 0, benefit: 0, mfNeg: 0 }
+    }))]));
+    for (let start = 0; start < total; start += months) {
+      for (let t = 0; t < months; t++) {
+        let eq = 1, mf = 1, mix = 1, downMonths = 0, peak = 1, wealth = 1, drawdown = 0;
+        for (let k = 1; k <= 12 && t + k <= months; k++) {
+          const i = start + t + k - 1, er = equity[i], mr = returns[i];
+          eq *= 1 + er; mf *= 1 + mr; mix *= 1 + 0.8 * er + 0.2 * mr;
+          wealth *= 1 + er; peak = Math.max(peak, wealth);
+          drawdown = Math.min(drawdown, wealth / peak - 1);
+          if (er < 0) downMonths++;
+          if (!lengths.includes(k) || eq >= 1) continue;
+          const group = data[k][run.scenarioBinary[start + t]];
+          const record = bucket => {
+            bucket.n++; bucket.eq += eq - 1; bucket.mf += mf - 1;
+            bucket.benefit += mix - eq; if (mf < 1) bucket.mfNeg++;
+          };
+          record(group.negative);
+          if (downMonths >= Math.ceil(k / 2) && drawdown <= -0.05) record(group.persistent);
+        }
+      }
+    }
+    const summarize = bucket => bucket.n ? {
+      observations: bucket.n, equityMean: bucket.eq / bucket.n,
+      mfMean: bucket.mf / bucket.n, benefit80_20: bucket.benefit / bucket.n,
+      mfNegativePct: 100 * bucket.mfNeg / bucket.n
+    } : null;
+    return Object.fromEntries(lengths.map(h => [h, data[h].map(group => ({
+      negative: summarize(group.negative), persistent: summarize(group.persistent)
+    }))]));
+  }
+  const rolling = Object.fromEntries(Object.entries(comparators).map(([key, equity]) =>
+    [key, rollingMetrics(equity)]));
   const scenarios = accum.map((a, code) => {
     a.values.sort((x, y) => x - y);
     const variance = a.n > 1 ? Math.max(0, (a.sum2 - a.sum * a.sum / a.n) / (a.n - 1)) : 0;
@@ -150,6 +188,7 @@ async function diagnoseEtf(isin) {
       monthlyP5: percentile(a.values, 0.05),
       qualityCorrelation: correlations.quality.overall,
       correlations, downside,
+      rolling: Object.fromEntries(Object.entries(rolling).map(([key, value]) => [key, value ? Object.fromEntries(Object.entries(value).map(([h, groups]) => [h, groups[code]])) : null])),
       persistence: Object.fromEntries(Object.entries(persistence).map(([key, value]) => [key, value ? value[code] : null]))
     };
   });
