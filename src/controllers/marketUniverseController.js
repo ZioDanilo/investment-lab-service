@@ -44,7 +44,17 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
   }
 };
 
+const { diagnoseEtf } = require('../services/marketUniverseV2DiagnosticsService');
+const diagnoseMarketUniverseEtfV2 = async (req, res) => {
+  try {
+    return res.status(200).json({ success: true, data: await diagnoseEtf(req.params.isin) });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({ success: false, error: error?.message || 'Diagnostics failed' });
+  }
+};
+
 module.exports = {
+  diagnoseMarketUniverseEtfV2,
   regenerateMarketUniverseV2,
   getMarketUniverseV2GenerationStatus,
   buildBinaryPortfolioProjectionV2
