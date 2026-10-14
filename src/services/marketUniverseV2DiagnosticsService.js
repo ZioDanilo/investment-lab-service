@@ -72,11 +72,33 @@ async function diagnoseEtf(isin) {
     if (vx <= 0 || vy <= 0) return null;
     return (sxy - sx * sy / n) / Math.sqrt(vx * vy);
   }
+  function tailMetrics(indices, equity) {
+    if (!equity || !indices.length) return null;
+    let mfSum = 0, eqSum = 0, mfNegative = 0, bothNegative = 0;
+    for (const i of indices) {
+      const mf = returns[i], eq = equity[i];
+      mfSum += mf; eqSum += eq;
+      if (mf < 0) mfNegative++;
+      if (mf < 0 && eq < 0) bothNegative++;
+    }
+    const mfMean = mfSum / indices.length;
+    const equityMean = eqSum / indices.length;
+    return {
+      observations: indices.length,
+      equityMean, mfMean,
+      mfNegativePct: 100 * mfNegative / indices.length,
+      bothNegativePct: 100 * bothNegative / indices.length,
+      portfolio80_20Mean: 0.8 * equityMean + 0.2 * mfMean,
+      benefit80_20: 0.2 * (mfMean - equityMean)
+    };
+  }
   const scenarios = accum.map((a, code) => {
     a.values.sort((x, y) => x - y);
     const variance = a.n > 1 ? Math.max(0, (a.sum2 - a.sum * a.sum / a.n) / (a.n - 1)) : 0;
-    const correlations = Object.fromEntries(Object.entries(comparators).map(([key, vector]) => {
-      if (!vector || !a.n) return [key, { overall: null, equityWorst5: null, equityWorst10: null, observationsWorst5: 0, observationsWorst10: 0 }];
+    const downside = {};\n    const correlations = Object.fromEntries(Object.entries(comparators).map(([key, vector]) => {
+      if (!vector || !a.n) {
+        downside[key] = { worst5: null, worst10: null, equityBelowMinus5: null };
+        return [key, { overall: null, equityWorst5: null, equityWorst10: null, observationsWorst5: 0, observationsWorst10: 0 }];
       // The tail is defined by the comparator equity ETF, not by Managed Futures.
       // Deterministic rank selection handles ties and keeps exactly floor(n * fraction) observations.
       const sorted = [...a.indices].sort((i, j) => vector[i] - vector[j] || i - j);
