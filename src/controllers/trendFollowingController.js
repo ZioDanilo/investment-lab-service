@@ -136,3 +136,68 @@ exports.putEtfSelections = async (req, res, next) => {
     res.json({ success: true, data: { etfIsins } });
   } catch (error) { next(error); }
 };
+
+const CRITERION_KEYS = ['sma-200', 'ts-momentum-12m', 'dual-sma-50-200'];
+const normalizeCriterion = (row) => ({
+  strategyKey: String(row?.strategyKey || ''),
+  isin: String(row?.isin || '').trim().toUpperCase(),
+  benchmarkIsin: String(row?.benchmarkIsin || '').trim().toUpperCase()
+});
+
+exports.getCriteria = async (req, res, next) => {
+  try {
+    if (!await getOwnedPortfolio(req, res)) return;
+    const { sequelize } = require('../config/database');
+    const portfolioId = req.params.portfolioId;
+    const saved = await PortfolioTrendStrategy.findOne({ where: { portfolioId, userId: req.user.id } });
+    if (Array.isArray(saved?.settings?.criteria)) {
+      return res.json({ success: true, data: { criteria: saved.settings.criteria } });
+    }
+    // Non-destructive legacy migration: recover all three historical strategy slots.
+    const [legacy] = await sequelize.query(
+      'SELECT strategy_key, slot_index, isin FROM public.portfolio_trend_etf_selections WHERE portfolio_id = :portfolioId ORDER BY strategy_key, slot_index',
+      { replacements: { portfolioId } }
+    );
+    const criteria = legacy
+      .filter(row => CRITERION_KEYS.includes(row.strategy_key))
+      .map(row => ({ strategyKey: row.strategy_key, isin: String(row.isin).toUpperCase(), benchmarkIsin: '' }));
+    // Also recover legacy SMA settings when selections table was not populated.
+    if (!criteria.length && saved?.strategyKey === 'sma-200' && Array.isArray(saved.settings?.etfIsins)) {
+      for (const isin of saved.settings.etfIsins.filter(Boolean)) criteria.push({ strategyKey: 'sma-200', isin, benchmarkIsin: '' });
+    }
+    return res.json({ success: true, data: { criteria, migratedFromLegacy: true } });
+  } catch (error) { next(error); }
+};
+
+exports.putCriteria = async (req, res, next) => {
+  try {
+    if (!await getOwnedPortfolio(req, res)) return;
+    const portfolioId = req.params.portfolioId;
+    const input = req.body?.criteria;
+    if (!Array.isArray(input) || input.length > 100 || input.some(row => !row || !CRITERION_KEYS.includes(row.strategyKey))) {
+      return res.status(400).json({ success: false, error: 'Elenco criteri non valido' });
+    }
+    const criteria = input.map(normalizeCriterion);
+    const validIsin = value => !value || /^[A-Z]{2}[A-Z0-9]{10}$/.test(value);
+    if (criteria.some(row => !validIsin(row.isin) || !validIsin(row.benchmarkIsin))) {
+      return res.status(400).json({ success: false, error: 'ISIN non valido' });
+    }
+    const chosen = [...new Set(criteria.map(row => row.isin).filter(Boolean))];
+    if (chosen.length) {
+      const { sequelize } = require('../config/database');
+      const [held] = await sequelize.query(
+        'SELECT DISTINCT e.isin FROM public.real_portfolio_etf r JOIN public.anagrafica_etf e ON e.id = r.etf_id WHERE r.real_portfolio_id = :portfolioId AND r.quantity > 0 AND e.isin IN (:isins)',
+        { replacements: { portfolioId, isins: chosen } }
+      );
+      const allowed = new Set(held.map(row => String(row.isin).toUpperCase()));
+      if (chosen.some(isin => !allowed.has(isin))) return res.status(400).json({ success: false, error: 'ETF non presente nel portafoglio reale' });
+    }
+    const [row] = await PortfolioTrendStrategy.findOrCreate({
+      where: { portfolioId, userId: req.user.id },
+      defaults: { portfolioId, userId: req.user.id, strategyKey: 'sma-200', settings: {} }
+    });
+    // Preserve every unrelated legacy setting and historical selections table.
+    await row.update({ settings: { ...row.settings, criteria } });
+    return res.json({ success: true, data: { criteria } });
+  } catch (error) { next(error); }
+};
