@@ -151,6 +151,49 @@ async function diagnoseEtf(isin) {
   }
   const rolling = Object.fromEntries(Object.entries(comparators).map(([key, equity]) =>
     [key, rollingMetrics(equity)]));
+  function trajectoryMetrics(equity) {
+    if (!equity) return null;
+    const months = Number(run.monthCount), result = SCENARIOS.map(() => ({}));
+    const lossBands = [[-0.1,-0.05],[-0.2,-0.1],[-1,-0.2]];
+    for (let start = 0; start < total; start += months) {
+      for (let t = 0; t + 12 <= months; t++) {
+        let eq = 1, mf = 1, mix = 1, eq6 = 1, mf6 = 1, negative = 0;
+        let largestLoss = 0, maxDrawdown = 0, peak = 1, wealth = 1;
+        for (let k = 0; k < 12; k++) {
+          const i = start + t + k, er = equity[i], mr = returns[i];
+          eq *= 1 + er; mf *= 1 + mr; mix *= 1 + 0.8 * er + 0.2 * mr;
+          if (k < 6) { eq6 *= 1 + er; mf6 *= 1 + mr; }
+          if (er < 0) negative++;
+          largestLoss = Math.min(largestLoss, er);
+          wealth *= 1 + er; peak = Math.max(peak, wealth);
+          maxDrawdown = Math.min(maxDrawdown, wealth / peak - 1);
+        }
+        const loss = eq - 1;
+        const band = lossBands.findIndex(([lo, hi]) => loss >= lo && loss < hi);
+        if (band < 0) continue;
+        const concentrated = largestLoss <= -0.05 && Math.abs(largestLoss) >= Math.abs(loss) * 0.5;
+        const progressive = negative >= 7 && largestLoss > -0.05 && maxDrawdown <= -0.05;
+        const kind = progressive ? 'progressive' : concentrated ? 'concentrated' : 'mixed';
+        const group = result[run.scenarioBinary[start + t]];
+        const key = ['loss5to10','loss10to20','lossOver20'][band];
+        if (!group[key]) group[key] = {};
+        if (!group[key][kind]) group[key][kind] = { n: 0, eq: 0, mf: 0, mfFirst6: 0, mfLast6: 0, benefit: 0, mfPositive: 0 };
+        const b = group[key][kind];
+        b.n++; b.eq += loss; b.mf += mf - 1; b.mfFirst6 += mf6 - 1;
+        b.mfLast6 += mf / mf6 - 1; b.benefit += mix - eq;
+        if (mf > 1) b.mfPositive++;
+      }
+    }
+    return result.map(group => Object.fromEntries(Object.entries(group).map(([band, kinds]) => [
+      band, Object.fromEntries(Object.entries(kinds).map(([kind, b]) => [kind, {
+        observations: b.n, equityMean: b.eq / b.n, mfMean: b.mf / b.n,
+        mfFirst6Mean: b.mfFirst6 / b.n, mfLast6Mean: b.mfLast6 / b.n,
+        benefit80_20: b.benefit / b.n, mfPositivePct: b.mfPositive * 100 / b.n
+      }]))
+    ])));
+  }
+  const trajectories = Object.fromEntries(Object.entries(comparators).map(([key, equity]) =>
+    [key, trajectoryMetrics(equity)]));
   const scenarios = accum.map((a, code) => {
     a.values.sort((x, y) => x - y);
     const variance = a.n > 1 ? Math.max(0, (a.sum2 - a.sum * a.sum / a.n) / (a.n - 1)) : 0;
@@ -188,6 +231,7 @@ async function diagnoseEtf(isin) {
       monthlyP5: percentile(a.values, 0.05),
       qualityCorrelation: correlations.quality.overall,
       correlations, downside,
+      trajectories: Object.fromEntries(Object.entries(trajectories).map(([key, groups]) => [key, groups ? groups[code] : null])),
       rolling: Object.fromEntries(Object.entries(rolling).map(([key, value]) => [key, value ? Object.fromEntries(Object.entries(value).map(([h, groups]) => [h, groups[code]])) : null])),
       persistence: Object.fromEntries(Object.entries(persistence).map(([key, value]) => [key, value ? value[code] : null]))
     };
