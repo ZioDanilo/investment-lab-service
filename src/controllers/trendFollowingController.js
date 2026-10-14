@@ -182,13 +182,8 @@ exports.putCriteria = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Elenco criteri non valido' });
     }
     const criteria = input.map(normalizeCriterion);
-    const assigned = new Set();
-    for (const row of criteria) {
-      if (!row.strategyKey) return res.status(400).json({ success: false, error: 'Non salvare criteri senza strategia selezionata' });
-      if (!row.isin) continue;
-      const pair = row.strategyKey + '|' + row.isin;
-      if (assigned.has(pair)) return res.status(400).json({ success: false, error: 'ETF duplicato nella stessa strategia' });
-      assigned.add(pair);
+    if (criteria.some(row => !row.strategyKey)) {
+      return res.status(400).json({ success: false, error: 'Non salvare criteri senza strategia selezionata' });
     }
     const validIsin = value => !value || /^[A-Z]{2}[A-Z0-9]{10}$/.test(value);
     if (criteria.some(row => !validIsin(row.isin) || !validIsin(row.benchmarkIsin))) {
