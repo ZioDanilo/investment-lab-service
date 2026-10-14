@@ -137,7 +137,11 @@ exports.putEtfSelections = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
-const CRITERION_KEYS = ['sma-200', 'ts-momentum-12m', 'dual-sma-50-200'];
+const CRITERION_KEYS = [
+  'sma-200', 'ts-momentum-12m', 'dual-sma-50-200',
+  'momentum-world-xeon', 'momentum-xeon-fast-reentry',
+  'trend-volatility-targeting', 'momentum-world-xeon-volatility-targeting'
+];
 const normalizeCriterion = (row) => ({
   strategyKey: String(row?.strategyKey || ''),
   isin: String(row?.isin || '').trim().toUpperCase(),
