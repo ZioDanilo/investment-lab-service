@@ -92,6 +92,27 @@ async function diagnoseEtf(isin) {
       benefit80_20: 0.2 * (mfMean - equityMean)
     };
   }
+  function persistenceMetrics(equity) {
+    if (!equity) return null;
+    const buckets = SCENARIOS.map(() => ({ onset: [], continuing: [], next1: [], next2: [], next3: [] }));
+    const months = Number(run.monthCount);
+    for (let i = 0; i < total; i++) {
+      if (equity[i] > -0.05) continue;
+      const month = i % months;
+      const bucket = buckets[run.scenarioBinary[i]];
+      const continuing = month > 0 && equity[i - 1] <= -0.05;
+      (continuing ? bucket.continuing : bucket.onset).push(i);
+      if (month + 1 < months) bucket.next1.push(i + 1);
+      if (month + 2 < months) bucket.next2.push(i + 2);
+      if (month + 3 < months) bucket.next3.push(i + 3);
+    }
+    return buckets.map(bucket => Object.fromEntries(
+      Object.entries(bucket).map(([key, indices]) => [key, tailMetrics(indices, equity)])
+    ));
+  }
+  const persistence = Object.fromEntries(
+    Object.entries(comparators).map(([key, equity]) => [key, persistenceMetrics(equity)])
+  );
   const scenarios = accum.map((a, code) => {
     a.values.sort((x, y) => x - y);
     const variance = a.n > 1 ? Math.max(0, (a.sum2 - a.sum * a.sum / a.n) / (a.n - 1)) : 0;
@@ -128,7 +149,8 @@ async function diagnoseEtf(isin) {
       negativeMonthsPct: a.n ? a.negative / a.n * 100 : null,
       monthlyP5: percentile(a.values, 0.05),
       qualityCorrelation: correlations.quality.overall,
-      correlations, downside
+      correlations, downside,
+      persistence: Object.fromEntries(Object.entries(persistence).map(([key, value]) => [key, value ? value[code] : null]))
     };
   });
 
@@ -144,6 +166,7 @@ async function diagnoseEtf(isin) {
       source: 'active_market_universe_v2'
     },
     warnings: [
+      'Follow-up months are grouped by shock-month scenario, can overlap, and are not proof of dynamic trend adaptation.',
       'Theoretical factor expectations are not included: generation-time factor snapshot is not persisted in the active MU. Current DB parameters may differ.',
       ...Object.entries(comparators).filter(([, vector]) => !vector).map(([key]) => key + ' ETF unavailable in active MU; its correlations are omitted.')
     ]
