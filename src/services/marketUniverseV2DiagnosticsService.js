@@ -95,7 +95,8 @@ async function diagnoseEtf(isin) {
   const scenarios = accum.map((a, code) => {
     a.values.sort((x, y) => x - y);
     const variance = a.n > 1 ? Math.max(0, (a.sum2 - a.sum * a.sum / a.n) / (a.n - 1)) : 0;
-    const downside = {};\n    const correlations = Object.fromEntries(Object.entries(comparators).map(([key, vector]) => {
+    const downside = {};
+    const correlations = Object.fromEntries(Object.entries(comparators).map(([key, vector]) => {
       if (!vector || !a.n) {
         downside[key] = { worst5: null, worst10: null, equityBelowMinus5: null };
         return [key, { overall: null, equityWorst5: null, equityWorst10: null, observationsWorst5: 0, observationsWorst10: 0 }];
