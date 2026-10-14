@@ -103,3 +103,21 @@ async function diagnoseEtf(isin) {
     };
   });
 
+  return {
+    runId: run.runId, seed: run.seed, pathCount: run.pathCount, monthCount: run.monthCount,
+    isin: normalized,
+    qualityIsin: comparators.quality ? COMPARATORS.quality : null,
+    comparatorIsins: COMPARATORS,
+    scenarios,
+    diagnostics: {
+      totalObservations: scenarios.reduce((sum, item) => sum + item.observations, 0),
+      expectedObservations: total,
+      source: 'active_market_universe_v2'
+    },
+    warnings: [
+      'Theoretical factor expectations are not included: generation-time factor snapshot is not persisted in the active MU. Current DB parameters may differ.',
+      ...Object.entries(comparators).filter(([, vector]) => !vector).map(([key]) => key + ' ETF unavailable in active MU; its correlations are omitted.')
+    ]
+  };
+}
+module.exports = { diagnoseEtf };
