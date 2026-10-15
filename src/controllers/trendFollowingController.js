@@ -171,7 +171,7 @@ exports.putSignalEnabled = async (req, res, next) => {
     // Update only the requested flag atomically, preserving criteria and other settings.
     const [rows] = await sequelize.query(`
       UPDATE public.portfolio_trend_strategies
-      SET settings = jsonb_set(settings, ARRAY['signalEnabled', :signal]::text[], CAST(:enabled AS jsonb), true),
+      SET settings = jsonb_set(settings, '{signalEnabled}', COALESCE(settings->'signalEnabled', '{}'::jsonb) || jsonb_build_object(:signal, CAST(:enabled AS jsonb)), true),
           updated_at = NOW()
       WHERE portfolio_id = :portfolioId AND user_id = :userId
       RETURNING settings
