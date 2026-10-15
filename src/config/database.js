@@ -38,6 +38,7 @@ const initializeAssociations = () => {
   const RealPortfolioOperation = require('../models/RealPortfolioOperation');
   const RealPortfolioEtf = require('../models/RealPortfolioEtf');
   const RealPortfolioOrder = require('../models/RealPortfolioOrder');
+  const PortfolioTrendStrategy = require('../models/PortfolioTrendStrategy');
   const Factor = require('../models/Factor');
   const FactorScenarioStatistic = require('../models/FactorScenarioStatistic');
   const FactorCorrelation = require('../models/FactorCorrelation');
@@ -71,6 +72,8 @@ const initializeAssociations = () => {
     if (!model.associations.owner) model.belongsTo(User, { foreignKey: 'userId', as: 'owner' });
   }
 
+  if (!Portafoglio.associations.trendStrategy) Portafoglio.hasOne(PortfolioTrendStrategy, { foreignKey: 'portfolioId', as: 'trendStrategy', onDelete: 'CASCADE' });
+  if (!PortfolioTrendStrategy.associations.portfolio) PortfolioTrendStrategy.belongsTo(Portafoglio, { foreignKey: 'portfolioId', as: 'portfolio' });
   if (!Portafoglio.associations.realOrder) Portafoglio.hasOne(RealPortfolioOrder, { foreignKey: 'realPortfolioId', as: 'realOrder', onDelete: 'CASCADE' });
   if (!RealPortfolioOrder.associations.portfolio) RealPortfolioOrder.belongsTo(Portafoglio, { foreignKey: 'realPortfolioId', as: 'portfolio', onDelete: 'CASCADE' });
   if (!User.associations.realPortfolioOrders) User.hasMany(RealPortfolioOrder, { foreignKey: 'userId', as: 'realPortfolioOrders', onDelete: 'CASCADE' });
@@ -170,6 +173,13 @@ const connectDB = async () => {
     initializeAssociations();
     await sequelize.authenticate();
     console.log('PostgreSQL Connected:', process.env.DATABASE_URL.split('@')[1]);
+
+    // Schema migrations belong to a dedicated maintenance operation, not every API boot.
+    // Opt in explicitly only when performing a controlled migration.
+    if (process.env.RUN_SCHEMA_MIGRATIONS !== 'true') {
+      console.log('Database authenticated; schema migrations skipped (RUN_SCHEMA_MIGRATIONS != true)');
+      return sequelize;
+    }
 
     // Import models
     const EtfQuotation = require('../models/EtfQuotation');

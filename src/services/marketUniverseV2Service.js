@@ -38,7 +38,10 @@ class MarketUniverseV2Service {
 
   static async getGenerationStatus() {
     const run = await MarketUniverseRunV2.findOne({ where: { status: 'GENERATING' }, order: [['generatedAt','DESC']] });
-    if (!run) return { inProgress: false };
+    if (!run) {
+      const latest = await MarketUniverseRunV2.findOne({ order: [['generatedAt', 'DESC']] });
+      return { inProgress: false, runId: latest?.runId || null, status: latest?.status || null, assetCount: Number(latest?.assetCount || 0) };
+    }
     const progressPercentage = Math.max(0, Math.min(100, Number(run.generationProgress || 0)));
     return {
       inProgress: true,

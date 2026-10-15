@@ -11,15 +11,12 @@ router.get('/daily', quotationController.getDailyQuotations);
 // Get quotation history for a specific ETF
 router.get('/history', quotationController.getQuotationHistory);
 
-// Delete today's quotations (for refresh)
-router.delete('/today', quotationController.deleteTodayQuotations);
-
-// Force refresh - Update ALL ETFs from JustETF, overwrite DB
+// Force refresh - Yahoo Finance only
 router.post('/force-refresh', quotationController.forceRefreshQuotations);
 
 // Refresh single ETF quotation
 router.post('/refresh-single', quotationController.refreshSingleQuotation);
-// Targeted EODHD refresh for the rebalance table (same daily provider quota/cache).
+// Targeted Yahoo Finance refresh for the rebalance table.
 router.post('/single/:isin/refresh', currentUser, (req, res, next) => {
   req.query.isin = String(req.params.isin || '').trim().toUpperCase();
   return quotationController.refreshSingleQuotation(req, res, next);
