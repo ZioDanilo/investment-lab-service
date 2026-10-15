@@ -9,8 +9,7 @@ const RUNS = {
 const ISINS = {
   mf: 'LU3307218399',
   world: 'IE00B4L5Y983',
-  quality: 'IE00BP3QZ601',
-  momentum: 'IE00BP3QZ601'
+  quality: 'IE00BP3QZ601'
 };
 const round = (n) => Number.isFinite(n) ? Number(n.toFixed(6)) : null;
 function vector(blob, count) {
@@ -55,7 +54,7 @@ function tail(mf, equity) {
   return { observations:indices.length, equityThreshold:round(threshold), mfMean:round(sum/indices.length), mfPositivePct:round(positive/indices.length*100), conditionalCorrelation:corr(mf,equity,indices) };
 }
 function portfolios(assets, paths, months) {
-  const specs={momentum100:{momentum:1},momentum80_mf20:{momentum:0.8,mf:0.2},momentum80_world20:{momentum:0.8,world:0.2}};
+  const specs={world100:{world:1},world80_mf20:{world:0.8,mf:0.2},world80_quality20:{world:0.8,quality:0.2}};
   const output={};
   for(const [name,weights] of Object.entries(specs)){
     const cagr=[],dd=[],vol=[],positive=[];
@@ -97,12 +96,12 @@ async function compare(req,res) {
       }
     }
     const references={};
-    for(const key of ['world','quality','momentum']){
+    for(const key of ['world','quality']){
       const a=data.previous[key],b=data.intermediate[key];let changed=0,maxDifference=0;
       for(let i=0;i<a.length;i++){const d=Math.abs(a[i]-b[i]);if(d>0)changed++;if(d>maxDifference)maxDifference=d;}
       references[key]={differentMonths:changed,maxAbsoluteDifference:round(maxDifference)};
     }
-    const result={diagnostic:'managed_futures_calibration_comparison',runActive:RUNS.intermediate,runPrevious:RUNS.previous,integrity,references,etfMetrics:{},tailRisk:{},portfolioComparison:{},warnings:['Previous run status FAILED and has no scenario/intensity vectors: exploratory comparison only.','Run calibration parameters are not persisted with the binary vectors.','Momentum identifier must be verified against ETF anagrafica before interpreting momentum portfolio results.']};
+    const result={diagnostic:'managed_futures_calibration_comparison',runActive:RUNS.intermediate,runPrevious:RUNS.previous,integrity,references,etfMetrics:{},tailRisk:{},portfolioComparison:{},warnings:['Previous run status FAILED and has no scenario/intensity vectors: exploratory comparison only.','Run calibration parameters are not persisted with the binary vectors.','Momentum not included: its ISIN is not confirmed in the current MU.']};
     for(const name of Object.keys(RUNS)){
       const d=data[name];
       result.etfMetrics[name]={};result.tailRisk[name]={};
