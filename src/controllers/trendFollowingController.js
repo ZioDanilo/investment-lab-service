@@ -192,15 +192,17 @@ exports.putCriteria = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'ISIN non valido' });
     }
     if(criteria.some(row => row.strategyKey === 'momentum-world-xeon' && (!row.isin || !row.benchmarkIsin || !row.thirdIsin)))return res.status(400).json({success:false,error:'A3Stati richiede tre ETF'});
-    const chosen = [...new Set(criteria.map(row => row.isin).filter(Boolean))];
+    // Trend Following strategies can reference any ETF from the global catalog,
+    // even when that ETF is not currently held in the real portfolio.
+    const chosen = [...new Set(criteria.flatMap(row => [row.isin,row.benchmarkIsin,row.thirdIsin]).filter(Boolean))];
     if (chosen.length) {
       const { sequelize } = require('../config/database');
-      const [held] = await sequelize.query(
-        'SELECT DISTINCT e.isin FROM public.real_portfolio_etf r JOIN public.anagrafica_etf e ON e.id = r.etf_id WHERE r.real_portfolio_id = :portfolioId AND r.quantity > 0 AND e.isin IN (:isins)',
-        { replacements: { portfolioId, isins: chosen } }
+      const [catalog] = await sequelize.query(
+        'SELECT DISTINCT isin FROM public.anagrafica_etf WHERE isin IN (:isins)',
+        { replacements: { isins: chosen } }
       );
-      const allowed = new Set(held.map(row => String(row.isin).toUpperCase()));
-      if (chosen.some(isin => !allowed.has(isin))) return res.status(400).json({ success: false, error: 'ETF non presente nel portafoglio reale' });
+      const allowed = new Set(catalog.map(row => String(row.isin).toUpperCase()));
+      if (chosen.some(isin => !allowed.has(isin))) return res.status(400).json({ success: false, error: 'ETF non presente nel catalogo' });
     }
     const [row] = await PortfolioTrendStrategy.findOrCreate({
       where: { portfolioId, userId: req.user.id },
