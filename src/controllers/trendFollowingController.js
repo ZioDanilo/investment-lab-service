@@ -145,7 +145,8 @@ const CRITERION_KEYS = [
 const normalizeCriterion = (row) => ({
   strategyKey: String(row?.strategyKey || ''),
   isin: String(row?.isin || '').trim().toUpperCase(),
-  benchmarkIsin: String(row?.benchmarkIsin || '').trim().toUpperCase()
+  benchmarkIsin: String(row?.benchmarkIsin || '').trim().toUpperCase(),
+  signal: row?.signal === 'buy' ? 'buy' : 'sell'
 });
 
 exports.getCriteria = async (req, res, next) => {
@@ -178,7 +179,7 @@ exports.putCriteria = async (req, res, next) => {
     if (!await getOwnedPortfolio(req, res)) return;
     const portfolioId = req.params.portfolioId;
     const input = req.body?.criteria;
-    if (!Array.isArray(input) || input.length > 100 || input.some(row => !row || !['', ...CRITERION_KEYS].includes(row.strategyKey))) {
+    if (!Array.isArray(input) || input.length > 100 || input.some(row => !row || !['', ...CRITERION_KEYS].includes(row.strategyKey) || (row.signal != null && !['buy','sell'].includes(row.signal)))) {
       return res.status(400).json({ success: false, error: 'Elenco criteri non valido' });
     }
     const criteria = input.map(normalizeCriterion);
