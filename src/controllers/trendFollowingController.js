@@ -221,7 +221,8 @@ exports.putCriteria = async (req, res, next) => {
     if (criteria.some(row => !validIsin(row.isin) || !validIsin(row.benchmarkIsin) || !validIsin(row.thirdIsin))) {
       return res.status(400).json({ success: false, error: 'ISIN non valido' });
     }
-    if(criteria.some(row => row.strategyKey === 'momentum-world-xeon' && (!row.isin || !row.benchmarkIsin || !row.thirdIsin)))return res.status(400).json({success:false,error:'A3Stati richiede tre ETF'});
+    if(criteria.some(row => row.strategyKey === 'momentum-world-xeon' && (!row.isin || !row.benchmarkIsin)))return res.status(400).json({success:false,error:'A 3 Stati richiede due ETF'});
+    for(const criterion of criteria)if(criterion.strategyKey === 'momentum-world-xeon')criterion.thirdIsin='';
     // Trend Following strategies can reference any ETF from the global catalog,
     // even when that ETF is not currently held in the real portfolio.
     const chosen = [...new Set(criteria.flatMap(row => [row.isin,row.benchmarkIsin,row.thirdIsin]).filter(Boolean))];
