@@ -150,6 +150,36 @@ const normalizeCriterion = (row) => ({
   signal: row?.signal === 'buy' ? 'buy' : 'sell'
 });
 
+const normalizeSignalEnabled = settings => ({
+  sell: settings?.signalEnabled?.sell !== false,
+  buy: settings?.signalEnabled?.buy !== false
+});
+
+exports.putSignalEnabled = async (req, res, next) => {
+  try {
+    if (!await getOwnedPortfolio(req, res)) return;
+    const { signal, enabled } = req.body ?? {};
+    if (!['sell', 'buy'].includes(signal) || typeof enabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'Stato segnale non valido' });
+    }
+    const portfolioId = req.params.portfolioId;
+    const { sequelize } = require('../config/database');
+    await PortfolioTrendStrategy.findOrCreate({
+      where: { portfolioId, userId: req.user.id },
+      defaults: { portfolioId, userId: req.user.id, strategyKey: 'sma-200', settings: {} }
+    });
+    // Update only the requested flag atomically, preserving criteria and other settings.
+    const [rows] = await sequelize.query(`
+      UPDATE public.portfolio_trend_strategies
+      SET settings = jsonb_set(settings, ARRAY['signalEnabled', :signal]::text[], CAST(:enabled AS jsonb), true),
+          updated_at = NOW()
+      WHERE portfolio_id = :portfolioId AND user_id = :userId
+      RETURNING settings
+    `, { replacements: { portfolioId, userId: req.user.id, signal, enabled: JSON.stringify(enabled) } });
+    return res.json({ success: true, data: { signalEnabled: normalizeSignalEnabled(rows[0]?.settings) } });
+  } catch (error) { next(error); }
+};
+
 exports.getCriteria = async (req, res, next) => {
   try {
     if (!await getOwnedPortfolio(req, res)) return;
@@ -157,7 +187,7 @@ exports.getCriteria = async (req, res, next) => {
     const portfolioId = req.params.portfolioId;
     const saved = await PortfolioTrendStrategy.findOne({ where: { portfolioId, userId: req.user.id } });
     if (Array.isArray(saved?.settings?.criteria)) {
-      return res.json({ success: true, data: { criteria: saved.settings.criteria } });
+      return res.json({ success: true, data: { criteria: saved.settings.criteria, signalEnabled: normalizeSignalEnabled(saved.settings) } });
     }
     // Non-destructive legacy migration: recover all three historical strategy slots.
     const [legacy] = await sequelize.query(
@@ -171,7 +201,7 @@ exports.getCriteria = async (req, res, next) => {
     if (!criteria.length && saved?.strategyKey === 'sma-200' && Array.isArray(saved.settings?.etfIsins)) {
       for (const isin of saved.settings.etfIsins.filter(Boolean)) criteria.push({ strategyKey: 'sma-200', isin, benchmarkIsin: '' });
     }
-    return res.json({ success: true, data: { criteria, migratedFromLegacy: true } });
+    return res.json({ success: true, data: { criteria, signalEnabled: normalizeSignalEnabled(saved?.settings), migratedFromLegacy: true } });
   } catch (error) { next(error); }
 };
 
@@ -209,7 +239,8 @@ exports.putCriteria = async (req, res, next) => {
       defaults: { portfolioId, userId: req.user.id, strategyKey: 'sma-200', settings: {} }
     });
     // Preserve every unrelated legacy setting and historical selections table.
-    await row.update({ settings: { ...row.settings, criteria } });
+    const { sequelize } = require('../config/database');
+    await sequelize.query(`UPDATE public.portfolio_trend_strategies SET settings = jsonb_set(settings, '{criteria}', CAST(:criteria AS jsonb), true), updated_at = NOW() WHERE portfolio_id = :portfolioId AND user_id = :userId`, { replacements: { portfolioId, userId: req.user.id, criteria: JSON.stringify(criteria) } });
     return res.json({ success: true, data: { criteria } });
   } catch (error) { next(error); }
 };
