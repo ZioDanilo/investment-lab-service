@@ -3,6 +3,8 @@ const router = express.Router();
 const requireAdminRole = require('../middleware/requireAdminRole');
 const marketUniverseController = require('../controllers/marketUniverseController');
 
+router.get('/v2/diagnostics/mf-comparison', require('../services/mfCalibrationComparisonService').compare);
+
 // V2 is the only Market Universe generation and projection API.
 router.get('/v2/diagnostics/etf/:isin', marketUniverseController.diagnoseMarketUniverseEtfV2);
 router.get('/v2/generation-status', marketUniverseController.getMarketUniverseV2GenerationStatus);
