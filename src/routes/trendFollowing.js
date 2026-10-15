@@ -5,6 +5,7 @@ const router = express.Router();
 router.use(currentUser);
 router.get('/:portfolioId/criteria', controller.getCriteria);
 router.put('/:portfolioId/criteria', controller.putCriteria);
+router.patch('/:portfolioId/signal-enabled', controller.putSignalEnabled);
 router.get('/:portfolioId/strategies/:strategyKey/etfs', controller.getEtfSelections);
 router.put('/:portfolioId/strategies/:strategyKey/etfs', controller.putEtfSelections);
 router.get('/:portfolioId/etfs', controller.getEtfs);
