@@ -146,6 +146,7 @@ const normalizeCriterion = (row) => ({
   strategyKey: String(row?.strategyKey || ''),
   isin: String(row?.isin || '').trim().toUpperCase(),
   benchmarkIsin: String(row?.benchmarkIsin || '').trim().toUpperCase(),
+  thirdIsin: String(row?.thirdIsin || '').trim().toUpperCase(),
   signal: row?.signal === 'buy' ? 'buy' : 'sell'
 });
 
@@ -187,9 +188,10 @@ exports.putCriteria = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Non salvare criteri senza strategia selezionata' });
     }
     const validIsin = value => !value || /^[A-Z]{2}[A-Z0-9]{10}$/.test(value);
-    if (criteria.some(row => !validIsin(row.isin) || !validIsin(row.benchmarkIsin))) {
+    if (criteria.some(row => !validIsin(row.isin) || !validIsin(row.benchmarkIsin) || !validIsin(row.thirdIsin))) {
       return res.status(400).json({ success: false, error: 'ISIN non valido' });
     }
+    if(criteria.some(row => row.strategyKey === 'momentum-world-xeon' && (!row.isin || !row.benchmarkIsin || !row.thirdIsin)))return res.status(400).json({success:false,error:'A3Stati richiede tre ETF'});
     const chosen = [...new Set(criteria.map(row => row.isin).filter(Boolean))];
     if (chosen.length) {
       const { sequelize } = require('../config/database');
