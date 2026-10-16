@@ -1,5 +1,8 @@
 const { Op, fn, col, where } = require('sequelize');
 const User = require('../models/User');
+const Portafoglio = require('../models/Portafoglio');
+const ETF = require('../models/ETF');
+const RealPortfolioOperation = require('../models/RealPortfolioOperation');
 
 exports.login = async (req, res, next) => {
   try {
@@ -85,6 +88,21 @@ exports.checkUsername = async (req, res, next) => {
       success: true,
       data: { available: !existingUser }
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Public, aggregate-only landing statistics. No user details are exposed.
+exports.getLandingStats = async (_req, res, next) => {
+  try {
+    const [users, portfolios, etfs, operations] = await Promise.all([
+      User.count(),
+      Portafoglio.count({ where: { status: 'open' } }),
+      ETF.count(),
+      RealPortfolioOperation.count({ where: { operationType: ['buy', 'sell'] } })
+    ]);
+    return res.status(200).json({ success: true, data: { users, portfolios, etfs, operations } });
   } catch (error) {
     next(error);
   }
