@@ -40,10 +40,10 @@ exports.register = async (req, res, next) => {
     const password = String(req.body?.password ?? '');
     const email = String(req.body?.email ?? '').trim().toLowerCase();
     const birthDate = String(req.body?.birthDate ?? '');
-    if (!email || email.length > 254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ success: false, error: 'Inserisci un indirizzo email valido' });
     }
-    const dateMatch = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(birthDate);
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birthDate);
     if (!dateMatch) {
       return res.status(400).json({ success: false, error: 'Data di nascita non valida' });
     }
