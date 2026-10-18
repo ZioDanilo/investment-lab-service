@@ -50,9 +50,10 @@ exports.register = async (req, res, next) => {
     const year = Number(dateMatch[1]), month = Number(dateMatch[2]), day = Number(dateMatch[3]);
     const date = new Date(Date.UTC(year, month - 1, day));
     const today = new Date();
+    const adultCutoff = new Date(Date.UTC(today.getUTCFullYear() - 18, today.getUTCMonth(), today.getUTCDate()));
     if (year < 1900 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 ||
-        date.getUTCDate() !== day || date.getTime() > today.getTime()) {
-      return res.status(400).json({ success: false, error: 'Data di nascita non valida' });
+        date.getUTCDate() !== day || date.getTime() > adultCutoff.getTime()) {
+      return res.status(400).json({ success: false, error: 'Data di nascita non valida o età inferiore a 18 anni' });
     }
 
 
@@ -71,7 +72,7 @@ exports.register = async (req, res, next) => {
     });
 
     if (existingUser) {
-      return res.status(409).json({ success: false, error: 'Username già esistente' });
+      return res.status(409).json({ success: false, error: 'Username già esistente', field: 'username' });
     }
 
     const existingEmail = await User.findOne({ where: where(fn('LOWER', col('email')), email), attributes: ['id'] });
