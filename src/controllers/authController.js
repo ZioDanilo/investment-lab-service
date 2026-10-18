@@ -92,6 +92,24 @@ exports.register = async (req, res, next) => {
   }
 };
 
+exports.checkRegistrationAvailability = async (req, res, next) => {
+  try {
+    const username = String(req.query?.username ?? '').trim().toLowerCase();
+    const email = String(req.query?.email ?? '').trim().toLowerCase();
+    const [existingUsername, existingEmail] = await Promise.all([
+      username ? User.findOne({ where: where(fn('LOWER', col('username')), username), attributes: ['id'] }) : Promise.resolve(null),
+      email ? User.findOne({ where: where(fn('LOWER', col('email')), email), attributes: ['id'] }) : Promise.resolve(null)
+    ]);
+    return res.status(200).json({
+      success: true,
+      data: {
+        usernameAvailable: username ? !existingUsername : null,
+        emailAvailable: email ? !existingEmail : null
+      }
+    });
+  } catch (error) { next(error); }
+};
+
 exports.checkEmail = async (req, res, next) => {
   try {
     const email = String(req.query?.email ?? '').trim().toLowerCase();
