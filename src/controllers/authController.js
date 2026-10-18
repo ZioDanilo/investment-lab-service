@@ -38,6 +38,23 @@ exports.register = async (req, res, next) => {
   try {
     const username = String(req.body?.username ?? '').trim();
     const password = String(req.body?.password ?? '');
+    const email = String(req.body?.email ?? '').trim().toLowerCase();
+    const birthDate = String(req.body?.birthDate ?? '');
+    if (!email || email.length > 254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+      return res.status(400).json({ success: false, error: 'Inserisci un indirizzo email valido' });
+    }
+    const dateMatch = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(birthDate);
+    if (!dateMatch) {
+      return res.status(400).json({ success: false, error: 'Data di nascita non valida' });
+    }
+    const year = Number(dateMatch[1]), month = Number(dateMatch[2]), day = Number(dateMatch[3]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const today = new Date();
+    if (year < 1900 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 ||
+        date.getUTCDate() !== day || date.getTime() > today.getTime()) {
+      return res.status(400).json({ success: false, error: 'Data di nascita non valida' });
+    }
+
 
     if (!username || !password) {
       return res.status(400).json({ success: false, error: 'Username e password sono obbligatori' });
@@ -57,7 +74,7 @@ exports.register = async (req, res, next) => {
       return res.status(409).json({ success: false, error: 'Username già esistente' });
     }
 
-    const user = await User.create({ username, password, role: 'GUEST' });
+    const user = await User.create({ username, password, email, birthDate, role: 'GUEST' });
 
     return res.status(201).json({
       success: true,
