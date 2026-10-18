@@ -74,6 +74,8 @@ exports.register = async (req, res, next) => {
       return res.status(409).json({ success: false, error: 'Username già esistente' });
     }
 
+    const existingEmail = await User.findOne({ where: where(fn('LOWER', col('email')), email), attributes: ['id'] });
+    if (existingEmail) return res.status(409).json({ success: false, error: 'Email già utilizzata', field: 'email' });
     const user = await User.create({ username, password, email, birthDate, role: 'GUEST' });
 
     return res.status(201).json({
@@ -87,6 +89,15 @@ exports.register = async (req, res, next) => {
     }
     next(error);
   }
+};
+
+exports.checkEmail = async (req, res, next) => {
+  try {
+    const email = String(req.query?.email ?? '').trim().toLowerCase();
+    if (!email) return res.status(200).json({ success: true, data: { available: true } });
+    const existing = await User.findOne({ where: where(fn('LOWER', col('email')), email), attributes: ['id'] });
+    return res.status(200).json({ success: true, data: { available: !existing } });
+  } catch (error) { next(error); }
 };
 
 exports.checkUsername = async (req, res, next) => {
