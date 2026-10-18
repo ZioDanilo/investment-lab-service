@@ -37,7 +37,9 @@ const allowedOrigins = new Set([
   'http://127.0.0.1:4200',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
-  'https://investment-lab-x.pages.dev'
+  'https://investment-lab-x.pages.dev',
+  'https://razeretf.com',
+  'https://www.razeretf.com'
 ]);
 
 const corsOptions = {
