@@ -27,6 +27,30 @@ const bufferToFloat32 = (value) => {
 };
 
 class MarketUniverseV2Service {
+  static async getFactorAudit() {
+    const snapshotRaw = await FactorMarketUniverseSnapshotService.build();
+    const operationalEtfs = snapshotRaw.etfs.filter((etf) =>
+      etf.exposures?.length > 0 && etf.specificRisk &&
+      ['ready', 'review_required'].includes(String(etf.validation?.status || ''))
+    );
+    const runtime = await import('investment-lab-core');
+    if (typeof runtime.auditFactorMarketUniverse !== 'function') {
+      throw Object.assign(new Error('Updated investment-lab-core audit export is unavailable'), {
+        code: 'FACTOR_AUDIT_RUNTIME_MISSING', statusCode: 503
+      });
+    }
+    const report = runtime.auditFactorMarketUniverse({
+      ...snapshotRaw,
+      etfs: operationalEtfs.map(etf => ({ ...etf, ready: true }))
+    });
+    return {
+      ...report,
+      generatedAt: new Date().toISOString(),
+      factorCount: snapshotRaw.factors.length,
+      etfCount: operationalEtfs.length
+    };
+  }
+
   static async getActiveRun() {
     const cachedRun = marketUniverseV2Cache.getRun();
     if (cachedRun) return cachedRun;
