@@ -51,6 +51,141 @@ class MarketUniverseV2Service {
     };
   }
 
+
+  // Read-only diagnostics on the persisted active run. No generation, writes or cache mutation.
+  static async getMonteCarloDiagnostics() {
+    const run = await this.getActiveRun();
+    const pathCount = Number(run.pathCount);
+    const monthCount = Number(run.monthCount);
+    const total = pathCount * monthCount;
+    if (!Number.isSafeInteger(total) || total <= 0 || pathCount < 1 || monthCount < 2) {
+      throw Object.assign(new Error('Invalid active run geometry'), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_GEOMETRY' });
+    }
+    const scenarioBytes = Buffer.from(run.scenarioBinary || []);
+    const intensity = bufferToFloat32(run.intensityBinary);
+    if (scenarioBytes.length !== total || intensity.length !== total) {
+      throw Object.assign(new Error('Invalid macro timeline geometry'), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_MACRO' });
+    }
+    const counts = SCENARIOS.map((scenario) => ({ scenario, months: 0, share: 0, spells: 0, meanSpellMonths: 0, maxSpellMonths: 0, meanIntensity: 0 }));
+    const spellLengths = SCENARIOS.map(() => []);
+    let invalidIntensities = 0;
+    for (let p = 0; p < pathCount; p++) {
+      let previous = -1, length = 0;
+      for (let m = 0; m < monthCount; m++) {
+        const k = p * monthCount + m;
+        const sc = scenarioBytes[k];
+        if (sc >= SCENARIOS.length) throw Object.assign(new Error('Unknown scenario code'), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_SCENARIO' });
+        counts[sc].months++;
+        if (Number.isFinite(intensity[k])) counts[sc].meanIntensity += intensity[k];
+        else invalidIntensities++;
+        if (sc === previous) length++;
+        else {
+          if (previous >= 0) spellLengths[previous].push(length);
+          previous = sc; length = 1;
+        }
+      }
+      if (previous >= 0) spellLengths[previous].push(length);
+    }
+    counts.forEach((c, i) => {
+      c.share = c.months / total;
+      c.meanIntensity /= c.months || 1;
+      c.spells = spellLengths[i].length;
+      c.meanSpellMonths = spellLengths[i].reduce((a, b) => a + b, 0) / (c.spells || 1);
+      c.maxSpellMonths = Math.max(0, ...spellLengths[i]);
+    });
+    const quantile = (values, q) => {
+      if (!values.length) return null;
+      const ordered = values.slice().sort((a, b) => a - b);
+      const index = (ordered.length - 1) * q;
+      const low = Math.floor(index), high = Math.ceil(index);
+      return ordered[low] + (ordered[high] - ordered[low]) * (index - low);
+    };
+    const rows = await MarketUniverseEtfV2.findAll({
+      where: { runId: run.runId }, attributes: ['isin', 'returnsBinary', 'valueCount'], raw: true
+    });
+    const etfs = [];
+    const vectors = new Map();
+    for (const row of rows) {
+      const isin = normalizeIsin(row.isin);
+      const v = bufferToFloat32(row.returnsBinary);
+      if (v.length !== total || Number(row.valueCount) !== total) {
+        throw Object.assign(new Error('Invalid ETF vector geometry: ' + isin), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_ETF_GEOMETRY' });
+      }
+      let sum = 0, sum2 = 0, invalid = 0, positive = 0;
+      const byScenario = SCENARIOS.map(() => ({ n: 0, sum: 0, sum2: 0 }));
+      const cagr = [], drawdown = [];
+      for (let p = 0; p < pathCount; p++) {
+        let wealth = 1, peak = 1, worst = 0;
+        for (let m = 0; m < monthCount; m++) {
+          const k = p * monthCount + m;
+          const value = v[k];
+          if (!Number.isFinite(value) || value <= -1) {
+            invalid++; continue;
+          }
+          sum += value; sum2 += value * value;
+          const bucket = byScenario[scenarioBytes[k]];
+          bucket.n++; bucket.sum += value; bucket.sum2 += value * value;
+          wealth *= 1 + value;
+          peak = Math.max(peak, wealth);
+          worst = Math.min(worst, wealth / peak - 1);
+        }
+        const annualGrowth = Math.pow(wealth, 12 / monthCount) - 1;
+        cagr.push(annualGrowth);
+        drawdown.push(worst);
+        if (wealth > 1) positive++;
+      }
+      const n = total - invalid, mean = sum / (n || 1);
+      const vol = Math.sqrt(Math.max(0, sum2 / (n || 1) - mean * mean) * 12);
+      etfs.push({
+        isin, invalidReturns: invalid, meanMonthlyReturn: mean,
+        arithmeticAnnualReturn: mean * 12, realizedAnnualVolatility: vol,
+        cagr: { p05: quantile(cagr, .05), p50: quantile(cagr, .5), p95: quantile(cagr, .95) },
+        maxDrawdown: { p01: quantile(drawdown, .01), p05: quantile(drawdown, .05), p50: quantile(drawdown, .5) },
+        probabilityPositive: positive / pathCount,
+        byScenario: byScenario.map((b, i) => {
+          const mu = b.sum / (b.n || 1);
+          return { scenario: SCENARIOS[i], months: b.n, annualizedMeanReturn: mu * 12,
+            annualizedVolatility: Math.sqrt(Math.max(0, b.sum2 / (b.n || 1) - mu * mu) * 12) };
+        })
+      });
+      vectors.set(isin, v);
+    }
+    // Pairwise realized correlations; retain all pairs for reproducibility.
+    const correlations = [];
+    const orderedIsins = etfs.map(e => e.isin);
+    for (let i = 0; i < orderedIsins.length; i++) {
+      const a = vectors.get(orderedIsins[i]);
+      for (let j = i + 1; j < orderedIsins.length; j++) {
+        const b = vectors.get(orderedIsins[j]);
+        let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+        for (let k = 0; k < total; k++) {
+          const x = a[k], y = b[k];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          n++; sx += x; sy += y; sxx += x*x; syy += y*y; sxy += x*y;
+        }
+        const covariance = sxy - sx * sy / (n || 1);
+        const denom = Math.sqrt(Math.max(0, (sxx - sx*sx/(n||1)) * (syy - sy*sy/(n||1))));
+        correlations.push({ isinA: orderedIsins[i], isinB: orderedIsins[j],
+          correlation: denom > 0 ? Math.max(-1, Math.min(1, covariance / denom)) : null });
+      }
+    }
+    return {
+      version: 1, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
+      readOnly: true, run: { runId: run.runId, seed: run.seed, pathCount, monthCount,
+        generatedAt: run.generatedAt, assetCount: run.assetCount },
+      conventions: {
+        returns: 'simple monthly returns in EUR only if source vectors were generated in EUR',
+        volatility: 'sampled pooled monthly standard deviation times sqrt(12)',
+        cagr: 'per-path terminal geometric annualized return, quantiles across paths',
+        drawdown: 'per-path peak-to-trough decline, quantiles across paths',
+        scenarioMean: 'arithmetic monthly mean times 12; not a geometric CAGR',
+        correlations: 'Pearson on pooled simulated monthly returns; includes macro-regime variation',
+        caveat: 'Diagnostics describe persisted simulations, not theoretical factor targets or historical calibration.'
+      },
+      scenarios: counts, invalidIntensities, etfs, correlations
+    };
+  }
+
   static async getActiveRun() {
     const cachedRun = marketUniverseV2Cache.getRun();
     if (cachedRun) return cachedRun;
