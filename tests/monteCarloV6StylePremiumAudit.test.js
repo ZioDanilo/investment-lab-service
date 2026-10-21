@@ -14,6 +14,18 @@ describe('Monte Carlo V6 observational style audit',()=>{
     expect(result.etfExposures[0].potentialOverlap).toBe(true);
     expect(result.etfExposures[0].doubleCountingConfirmed).toBe(false);
   });
+  test('reconciles contributions and reports zero-style sensitivity without changing inputs',()=>{
+    const before=JSON.stringify(manifestRecord);
+    const result=auditStylePremiums({manifestRecord,manifestVerification:{status:'PASS'}});
+    const general=result.reconciliation[0].scenarios.general;
+    expect(general.accountingCheck).toBe('PASS');
+    expect(general.marketStyleCoExposure).toBe(true);
+    expect(general.premiumSemantics).toBe('NOT_ESTABLISHED');
+    expect(general.configuredAnnualizedArithmetic-general.withoutStyleAnnualizedArithmetic)
+      .toBeCloseTo(general.incrementalStyleAnnualizedArithmetic,12);
+    expect(result.reconciliationSummary.completeScenarioRows).toBe(1);
+    expect(JSON.stringify(manifestRecord)).toBe(before);
+  });
   test('refuses to use an unauthenticated snapshot',()=>{
     const result=auditStylePremiums({manifestRecord,manifestVerification:{status:'FAIL'}});
     expect(result.status).toBe('BLOCKED_UNVERIFIED_MANIFEST');
