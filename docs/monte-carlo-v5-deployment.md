@@ -1,25 +1,29 @@
-# Monte Carlo V5 — deploy and acceptance
+# Monte Carlo V5 — technical acceptance and handover
 
-## Deployment order
-1. Apply `sql/monte_carlo_v5_manifest.sql` to the PostgreSQL database.
-2. Deploy the backend `montecarlo` branch.
-3. Deploy the frontend `montecarlo` branch.
-4. Run `npm test -- --runInBand tests/monteCarloV5Foundation.test.js` in the backend.
-5. Open the diagnostics against the **existing** run: `GENERATION_TIME_MANIFEST` must be `UNVERIFIED` (no retroactive manifest).
-6. Only after explicit approval, generate a **new** run. Check the row in `monte_carlo_run_manifest` and confirm `GENERATION_TIME_MANIFEST = PASS` and `MACRO_CONFIG_PROVENANCE = PASS`.
+## Scope
+V5 provides an immutable generation-time factor/macro manifest, run-identity checks, SHA-256 verification, and conservative read-only diagnostics. It does not recalibrate returns, correlations, macro regimes or ETF risk.
 
-## Compatibility and safety
-- Existing runs are preserved and remain readable. Their historical provenance is unknown.
-- New generations fail closed when the migration is missing.
-- A database trigger forbids updating or deleting an existing manifest.
-- The V5 generation uses the same return and macro engines and the same parameters as V2; this is not the economic V6 upgrade.
-- SHA-256 verifies persisted manifest integrity, not financial calibration or the actual runtime version. A future upgrade should include a build commit SHA and independently replay a seeded sample path.
-- Style factors are **not** automatically classified as incremental excess returns. Do not change their numerical expected returns without calibration evidence.
-- Duration, carry, credit and FX hedging still require verified instrument metadata; V5 reports these as unverified, not as passed.
+## Observed production diagnostic (2026-10-21 13:17:38 UTC)
+Active run: `343568bd-3fe6-4935-8525-a849f384df19` (seed 42, 1,000 paths, 360 months, 26 ETFs).
+Status: `INPUT_PROVENANCE_VERIFIED`; 5 PASS, 0 FAIL, 2 UNVERIFIED:
+- PASS: `UNIQUE_FACTOR_IDS`, `ETF_FACTOR_REFERENCES`, `FINITE_FACTOR_BETAS`, `GENERATION_TIME_MANIFEST`, `MACRO_CONFIG_PROVENANCE`.
+- UNVERIFIED: `INCREMENTAL_STYLE_PREMIA`, `BOND_FX_INSTRUMENT_METADATA` (economic validation, not silently treated as PASS).
+- V4 validation and V3 economic certification remain unverified/not certified.
 
-## Acceptance criteria
-- No automatic regeneration or mutation of historical runs.
-- Deterministic manifest digest, tampering detected, style semantics remain unverified without evidence.
-- New runs persist factor + macro inputs before the first simulated month.
-- Diagnostics use verified generation-time factors when available.
-- Existing reports retain their V3 and V4 sections.
+The active run uses legacy timestamp hashing compatibility. Its stored hash `0b870943a64f2f144d4fe6ba69a348431851c858f4a81c0626c150fc3b749dc0` matches the reconstructed historical serialization; timestamp fields were **not authenticated** by the original hash. New manifests serialize Date values as ISO strings. Do not rewrite the immutable legacy manifest or imply that timestamps were verified.
+
+## Test execution
+From the backend repository, with dependencies installed:
+```sh
+npm test -- --runInBand tests/monteCarloV5Foundation.test.js
+```
+The tests cover deterministic hashing, Date JSON roundtrip, legacy Date compatibility, tamper detection, run identity and dimensions, invalid beta rejection, and conservative style-premium gates.
+
+**Test execution status:** not independently observed yet. Do not report the test suite as PASS until an actual runner exits successfully.
+
+## Acceptance / remaining boundaries
+- The manifest and macro provenance PASS on the persisted active run, without regeneration or writes.
+- Historical run integrity is subject to the explicitly documented timestamp limitation.
+- No economic calibration or bit-for-bit replay certification is claimed.
+- The V6 workstream owns style premium evidence, bond/FX metadata, macro validation, pinned runtime identity and seeded replay.
+- Database migration: `sql/monte_carlo_v5_manifest.sql`; future generation requires the manifest table and must fail closed when it is unavailable.
