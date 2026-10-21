@@ -11,7 +11,8 @@ const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
 const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
-const { buildMonteCarloV5Foundation } = require('./monteCarloV5FoundationService');
+const { buildMonteCarloV5Foundation, createGenerationManifest } = require('./monteCarloV5FoundationService');
+const MonteCarloRunManifest = require('../models/MonteCarloRunManifest');
 const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL } = require('../utils/marketUniverseBinaryTransport');
@@ -241,7 +242,14 @@ class MarketUniverseV2Service {
     const v4Validation = calculateMomentValidation({
       snapshot: factorSnapshot, etfs, correlations, scenarioBytes, intensity, run
     });
-    const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios: counts, v3Audit, v4Validation });
+    let manifestRecord = null;
+    try {
+      manifestRecord = await MonteCarloRunManifest.findByPk(run.runId, { raw:true });
+    } catch(error) {
+      if(error?.parent?.code !== '42P01') throw error;
+      // Migration not deployed yet; historical runs remain inspectable.
+    }
+    const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios: counts, v3Audit, v4Validation, manifestRecord });
     const diagnosticFinished = performance.now();
     return {
       version: 5, v3Audit, v4Validation, v5Foundation,
@@ -367,6 +375,10 @@ class MarketUniverseV2Service {
         });
       }
 
+      // Freeze all generation inputs BEFORE drawing any random numbers.
+      const generationManifest = createGenerationManifest({
+        factorSnapshot, macroSnapshot, seed, pathCount, monthCount, assetOrder
+      });
       if (!run) {
         run = await MarketUniverseRunV2.create({
           seed: Number(seed), pathCount: Number(pathCount), monthCount: Number(monthCount),
@@ -375,6 +387,14 @@ class MarketUniverseV2Service {
       } else {
         await run.update({ assetCount: operationalEtfs.length, assetOrder, generationProgress: 1 });
       }
+
+      // Fail closed if the V5 manifest migration is absent; never produce
+      // an untraceable new simulation. The database trigger prevents mutation.
+      await MonteCarloRunManifest.create({
+        runId:run.runId,schemaVersion:5,
+        manifestSha256:generationManifest.sha256,
+        manifest:generationManifest.manifest
+      });
 
       const totalValues = Number(pathCount) * Number(monthCount);
       const returnsByIsin = new Map(assetOrder.map((isin) => [isin, new Float32Array(totalValues)]));
