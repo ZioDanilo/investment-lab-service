@@ -10,6 +10,7 @@ const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
 const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
+const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL } = require('../utils/marketUniverseBinaryTransport');
 const marketUniverseV2Cache = require('./marketUniverseV2Cache');
@@ -230,8 +231,11 @@ class MarketUniverseV2Service {
       etfs, correlations, conditionalCorrelations, scenarios: counts,
       scenarioBytes, pathCount, monthCount
     });
+    const v4Validation = calculateMomentValidation({
+      snapshot: factorSnapshot, etfs, correlations, scenarioBytes, intensity, run
+    });
     return {
-      version: 3, v3Audit, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
+      version: 4, v3Audit, v4Validation, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
       readOnly: true, run: { runId: run.runId, seed: run.seed, pathCount, monthCount,
         generatedAt: run.generatedAt, assetCount: run.assetCount },
       conventions: {
