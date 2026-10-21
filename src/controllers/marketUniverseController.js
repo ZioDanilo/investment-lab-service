@@ -13,6 +13,19 @@ const getMonteCarloDiagnostics = async (req, res) => {
   }
 };
 
+const getReturnCalibrationV6 = async (req, res) => {
+  try {
+    const data = await MarketUniverseV2Service.getReturnCalibrationV6();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({
+      success: false, code: error?.code || 'RETURN_CALIBRATION_FAILED',
+      error: error?.message || 'Return calibration failed'
+    });
+  }
+};
+
 const getFactorAudit = async (req, res) => {
   try {
     const data = await MarketUniverseV2Service.getFactorAudit();
@@ -72,6 +85,7 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
 };
 
 module.exports = {
+  getReturnCalibrationV6,
   getMonteCarloDiagnostics,
   getFactorAudit,
   regenerateMarketUniverseV2,
