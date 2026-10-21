@@ -226,7 +226,7 @@ class MarketUniverseV2Service {
       .map(f => ({ code: 'VERIFY_INCREMENTAL_STYLE_PREMIUM', factorCode: f.code,
         note: 'Confirm that expected returns are incremental premiums rather than full equity returns.' }));
     const v3Audit = await buildMonteCarloV3Audit({
-      factorSnapshot, macroSnapshot: await this.buildMacroSnapshot(orderedIsins),
+      factorSnapshot,
       etfs, correlations, conditionalCorrelations, scenarios: counts,
       scenarioBytes, pathCount, monthCount
     });
