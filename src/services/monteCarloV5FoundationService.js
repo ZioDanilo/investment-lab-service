@@ -12,10 +12,22 @@ function stable(value) {
 }
 const sha256 = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 const norm = value => String(value ?? '').trim().toUpperCase();
-function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, v4Validation }) {
+function createGenerationManifest({factorSnapshot,macroSnapshot,seed,pathCount,monthCount,assetOrder}) {
+  const manifest = {schemaVersion:5,generator:'factor_market_universe_v2',
+    seed:Number(seed),pathCount:Number(pathCount),monthCount:Number(monthCount),
+    assetOrder:assetOrder.map(norm),factorSnapshot,macroSnapshot};
+  return {manifest,sha256:sha256(manifest)};
+}
+function verifyGenerationManifest(record) {
+  if(!record)return {status:'UNVERIFIED',reason:'No generation-time manifest exists for this historical run.'};
+  const hash=sha256(record.manifest);
+  return {status:hash===record.manifestSha256?'PASS':'FAIL',
+    recordedSha256:record.manifestSha256,computedSha256:hash,
+    reason:hash===record.manifestSha256?'Generation manifest hash matches stored JSON.':'Manifest hash mismatch.'};
+}
+function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, v4Validation, manifestRecord = null }) {
   const factors = (factorSnapshot.factors || []).map(f => ({
-    id:f.id,code:f.code,returnMode:f.returnMode,
-    scenarios:f.scenarios ?? f.scenarioParameters ?? null
+    id:f.id,code:f.code,returnMode:f.returnMode,statistics:f.statistics
   }));
   const etfs = (factorSnapshot.etfs || []).map(e => ({
     isin:norm(e.isin),exposures:(e.exposures || []).map(x=>({factorId:x.factorId,beta:x.beta})),
@@ -45,10 +57,11 @@ function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, 
   add('INCREMENTAL_STYLE_PREMIA','UNVERIFIED',
     'Require source-backed incremental style premium definitions before changing expected returns.',
     {factors:style.map(s=>s.code)});
-  add('GENERATION_TIME_MANIFEST','UNVERIFIED',
-    'The V2 run table has no persisted immutable configuration manifest. Current hash cannot authenticate historical inputs.');
-  add('MACRO_CONFIG_PROVENANCE','UNVERIFIED',
-    'The original macro transition, inertia and intensity configuration is not persisted with this run.');
+  const manifestVerification=verifyGenerationManifest(manifestRecord);
+  add('GENERATION_TIME_MANIFEST',manifestVerification.status,
+    'Generation-time manifest must be persisted and its SHA-256 must verify.',manifestVerification);
+  add('MACRO_CONFIG_PROVENANCE',manifestVerification.status==='PASS' && manifestRecord.manifest.macroSnapshot?'PASS':'UNVERIFIED',
+    'Original macro configuration must be included in the verified generation manifest.');
   add('BOND_FX_INSTRUMENT_METADATA','UNVERIFIED',
     'Verified duration, carry, base currency and hedge metadata are required for a bond/FX engine.');
   const failures=checks.filter(x=>x.status==='FAIL').length;
@@ -58,8 +71,9 @@ function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, 
     configuration:{
       currentFactorSnapshotSha256:sha256(config),
       currentFactorCount:factors.length,currentEtfCount:etfs.length,
-      generationTimeSha256:null,provenance:'CURRENT_LIVE_SNAPSHOT_ONLY',
-      historicallyReproducible:false,
+      generationTimeSha256:manifestRecord?.manifestSha256??null,
+      provenance:manifestVerification.status==='PASS'?'VERIFIED_GENERATION_TIME_MANIFEST':'CURRENT_LIVE_SNAPSHOT_ONLY',
+      historicallyReproducible:manifestVerification.status==='PASS',
       caveat:'This hash is not a generation-time manifest and must not be presented as proof of historical reproducibility.'
     },
     semantics:{stylePremia:style, returnConvention:'simple_monthly',
@@ -75,4 +89,4 @@ function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, 
     ]
   };
 }
-module.exports={buildMonteCarloV5Foundation};
+module.exports={buildMonteCarloV5Foundation,createGenerationManifest,verifyGenerationManifest,sha256};
