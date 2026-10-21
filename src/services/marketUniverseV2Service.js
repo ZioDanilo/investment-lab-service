@@ -9,6 +9,7 @@ const MonteCarloGlobalProperty = require('../models/MonteCarloGlobalProperty');
 const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
 const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
+const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL } = require('../utils/marketUniverseBinaryTransport');
 const marketUniverseV2Cache = require('./marketUniverseV2Cache');
@@ -224,8 +225,13 @@ class MarketUniverseV2Service {
         f.returnMode === 'compounded_return')
       .map(f => ({ code: 'VERIFY_INCREMENTAL_STYLE_PREMIUM', factorCode: f.code,
         note: 'Confirm that expected returns are incremental premiums rather than full equity returns.' }));
+    const v3Audit = await buildMonteCarloV3Audit({
+      factorSnapshot, macroSnapshot: await this.buildMacroSnapshot(orderedIsins),
+      etfs, correlations, conditionalCorrelations, scenarios: counts,
+      scenarioBytes, pathCount, monthCount
+    });
     return {
-      version: 2, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
+      version: 3, v3Audit, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
       readOnly: true, run: { runId: run.runId, seed: run.seed, pathCount, monthCount,
         generatedAt: run.generatedAt, assetCount: run.assetCount },
       conventions: {
