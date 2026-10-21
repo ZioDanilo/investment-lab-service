@@ -1,3 +1,4 @@
+const { validateHistoricalFactorPremiums } = require('../services/monteCarloV6HistoricalFactorValidationService');
 const { MarketUniverseV2Service } = require('../services/marketUniverseV2Service');
 
 const getMonteCarloDiagnostics = async (req, res) => {
@@ -9,6 +10,19 @@ const getMonteCarloDiagnostics = async (req, res) => {
     return res.status(Number(error?.statusCode) || 500).json({
       success: false, code: error?.code || 'MONTE_CARLO_DIAGNOSTICS_FAILED',
       error: error?.message || 'Monte Carlo diagnostics failed'
+    });
+  }
+};
+
+const validateHistoricalFactorPremiumsV6 = async (req, res) => {
+  try {
+    const data = validateHistoricalFactorPremiums(req.body || {});
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({success:true,data});
+  } catch(error) {
+    return res.status(Number(error?.statusCode)||500).json({
+      success:false,code:'HISTORICAL_FACTOR_VALIDATION_FAILED',
+      error:error?.message||'Historical validation failed'
     });
   }
 };
@@ -85,6 +99,7 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
 };
 
 module.exports = {
+  validateHistoricalFactorPremiumsV6,
   getReturnCalibrationV6,
   getMonteCarloDiagnostics,
   getFactorAudit,
