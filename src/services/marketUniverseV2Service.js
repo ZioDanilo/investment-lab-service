@@ -11,7 +11,7 @@ const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
 const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
-const { buildMonteCarloV5Foundation, createGenerationManifest } = require('./monteCarloV5FoundationService');
+const { buildMonteCarloV5Foundation, createGenerationManifest, verifyGenerationManifest } = require('./monteCarloV5FoundationService');
 const MonteCarloRunManifest = require('../models/MonteCarloRunManifest');
 const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
@@ -247,7 +247,7 @@ class MarketUniverseV2Service {
     });
     const beforeV4 = performance.now();
     const verifiedManifest = manifestRecord &&
-      require('./monteCarloV5FoundationService').verifyGenerationManifest(manifestRecord).status === 'PASS';
+      verifyGenerationManifest(manifestRecord, run).status === 'PASS';
     const v4Validation = calculateMomentValidation({
       snapshot: verifiedManifest ? manifestRecord.manifest.factorSnapshot : factorSnapshot,
       etfs, correlations, scenarioBytes, intensity, run
@@ -257,7 +257,8 @@ class MarketUniverseV2Service {
       v4Validation.generationTimeSha256 = manifestRecord.manifestSha256;
       // Mathematical consistency still requires formal statistical acceptance tests.
     }
-    const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios: counts, v3Audit, v4Validation, manifestRecord });
+    const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot: verifiedManifest ? manifestRecord.manifest.factorSnapshot : factorSnapshot,
+      run, scenarios: counts, v3Audit, v4Validation, manifestRecord });
     const diagnosticFinished = performance.now();
     return {
       version: 5, v3Audit, v4Validation, v5Foundation,
