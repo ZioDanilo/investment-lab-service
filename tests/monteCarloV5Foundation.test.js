@@ -21,6 +21,31 @@ describe('Monte Carlo V5 manifest',()=>{
     expect(verifyGenerationManifest({manifest:{...a.manifest,seed:43},manifestSha256:a.sha256}).status).toBe('FAIL');
     expect(verifyGenerationManifest(null).status).toBe('UNVERIFIED');
   });
+  test('rejects manifest attached to the wrong run or with mismatched dimensions',()=>{
+    const a=createGenerationManifest(options);
+    const run={runId:'r1',seed:42,pathCount:1000,monthCount:360,assetOrder:['TEST'],assetCount:1};
+    const record={runId:'r1',schemaVersion:5,manifest:a.manifest,manifestSha256:a.sha256};
+    expect(verifyGenerationManifest(record,run).status).toBe('PASS');
+    expect(verifyGenerationManifest(record,{...run,runId:'r2'}).issues).toContain('RUN_ID_MISMATCH');
+    expect(verifyGenerationManifest(record,{...run,monthCount:120}).issues).toContain('MONTHCOUNT_MISMATCH');
+    expect(verifyGenerationManifest(record,{...run,assetOrder:['OTHER']}).issues).toContain('ASSET_ORDER_MISMATCH');
+    expect(verifyGenerationManifest({...record,schemaVersion:4},run).status).toBe('FAIL');
+  });
+  test('missing beta must fail rather than coerce null to zero',()=>{
+    const invalid={...snapshot,etfs:[{...snapshot.etfs[0],exposures:[{factorId:1,beta:null}]}]};
+    const report=buildMonteCarloV5Foundation({factorSnapshot:invalid,
+      run:{runId:'r',seed:42,pathCount:1000,monthCount:360},scenarios:[]});
+    expect(report.checks.find(x=>x.id==='FINITE_FACTOR_BETAS').status).toBe('FAIL');
+  });
+  test('a verified manifest certifies inputs, not a bit-for-bit replay',()=>{
+    const a=createGenerationManifest(options);
+    const run={runId:'r1',seed:42,pathCount:1000,monthCount:360,assetOrder:['TEST'],assetCount:1};
+    const report=buildMonteCarloV5Foundation({factorSnapshot:snapshot,run,scenarios:[],
+      manifestRecord:{runId:'r1',schemaVersion:5,manifest:a.manifest,manifestSha256:a.sha256}});
+    expect(report.configuration.generationInputsTraceable).toBe(true);
+    expect(report.configuration.historicallyReproducible).toBe(false);
+    expect(report.checks.find(x=>x.id==='GENERATION_TIME_MANIFEST').status).toBe('PASS');
+  });
   test('style premiums are never silently certified or reinterpreted',()=>{
     const report=buildMonteCarloV5Foundation({factorSnapshot:snapshot,
       run:{runId:'r',seed:42,pathCount:1000,monthCount:360},scenarios:[],
