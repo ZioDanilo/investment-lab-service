@@ -19,7 +19,7 @@ const LEGACY_DATE_KEYS = new Set(['createdAt','updatedAt','deletedAt','validated
 function legacyDateShape(value) {
   if (Array.isArray(value)) return value.map(legacyDateShape);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) =>
-    [k, LEGACY_DATE_KEYS.has(k) && typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(v) ? {} : legacyDateShape(v)]));
+    [k, LEGACY_DATE_KEYS.has(k) && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) ? {} : legacyDateShape(v)]));
   return value;
 }
 const norm = value => String(value ?? '').trim().toUpperCase();
