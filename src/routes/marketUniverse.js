@@ -7,6 +7,7 @@ const marketUniverseController = require('../controllers/marketUniverseControlle
 // Read-only diagnostic: does not regenerate or modify the Market Universe.
 router.get('/v2/monte-carlo-diagnostics', marketUniverseController.getMonteCarloDiagnostics);
 router.get('/v2/factor-audit', marketUniverseController.getFactorAudit);
+router.get('/v2/return-calibration', marketUniverseController.getReturnCalibrationV6);
 
 // V2 is the only Market Universe generation and projection API.
 router.get('/v2/generation-status', marketUniverseController.getMarketUniverseV2GenerationStatus);
