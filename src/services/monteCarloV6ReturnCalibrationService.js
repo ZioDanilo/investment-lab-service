@@ -59,7 +59,7 @@ function calibrateReturnsV6({manifestRecord, manifestVerification}) {
         }
         const baseContribution=beta*original;
         baseline+=baseContribution;
-        const group=code==='GLOBAL_EQUITY'?'market':FOCUS.includes(code)||['QUALITY','LOW_VOLATILITY','GROWTH'].includes(code)?'style':'other';
+        const group=code==='GLOBAL_EQUITY'?'market':['MOMENTUM','VALUE','QUALITY','LOW_VOLATILITY','GROWTH'].includes(code)?'style':'other';
         groups[group]+=baseContribution;
         details.push({code,beta,annualFactorTarget:annual,monthlyLocation:original,
           annualizedArithmeticContribution:12*baseContribution,group,valid:true});
