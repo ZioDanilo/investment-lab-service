@@ -176,7 +176,15 @@ class MarketUniverseV2Service {
           const generated = runtime.generateMonthlyEtfReturnsFromFactors(factorSnapshot, month.scenario, month.intensity, () => random.next());
           for (const entry of generated.etfReturns) {
             const target = returnsByIsin.get(normalizeIsin(entry.isin));
-            if (target) target[flatIndex] = Number(entry.monthlyReturn);
+            const value = Number(entry.monthlyReturn);
+            if (!Number.isFinite(value) || value <= -1) {
+              throw Object.assign(new Error('Invalid ETF monthly return generated; refusing to persist a non-compoundable simulation'), {
+                code: 'INVALID_GENERATED_ETF_RETURN',
+                statusCode: 422,
+                details: { isin: entry.isin, pathId, monthIndex, value }
+              });
+            }
+            if (target) target[flatIndex] = value;
           }
         }
         if ((pathId + 1) % 10 === 0 || pathId + 1 === Number(pathCount)) {
@@ -202,10 +210,8 @@ class MarketUniverseV2Service {
       await run.update({ active: true, status: 'ACTIVE', generationProgress: 100 });
       marketUniverseV2Cache.invalidate();
       marketUniverseV2Cache.setRun(run);
-      if (previous && previous.runId !== run.runId) {
-        await MarketUniverseEtfV2.destroy({ where: { runId: previous.runId } });
-        await previous.destroy();
-      }
+      // Keep the previous completed run for reproducible before/after comparisons.
+      // Only the newest run is active; historical run data remain immutable.
       return { success: true, version: 2, runId: run.runId, pathCount: Number(pathCount), monthCount: Number(monthCount), assetCount: rows.length, rowCount: rows.length };
     } catch (error) {
       if (run) await run.update({ status: 'FAILED', active: false }).catch(() => {});
