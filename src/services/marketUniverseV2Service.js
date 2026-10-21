@@ -122,10 +122,11 @@ class MarketUniverseV2Service {
       }
       let sum = 0, sum2 = 0, invalid = 0, positive = 0;
       const byScenario = SCENARIOS.map(() => ({ n: 0, sum: 0, sum2: 0 }));
-      const cagr = [], drawdown = [];
+      const cagr = [], drawdown = [], pathVolatilities = [];
       const monthlyLosses = [];
       for (let p = 0; p < pathCount; p++) {
         let wealth = 1, peak = 1, worst = 0;
+        let pathSum = 0, pathSum2 = 0, pathValid = 0;
         for (let m = 0; m < monthCount; m++) {
           const k = p * monthCount + m;
           const value = v[k];
@@ -133,6 +134,7 @@ class MarketUniverseV2Service {
             invalid++; continue;
           }
           sum += value; sum2 += value * value;
+          pathSum += value; pathSum2 += value * value; pathValid++;
           monthlyLosses.push(value);
           const bucket = byScenario[scenarioBytes[k]];
           bucket.n++; bucket.sum += value; bucket.sum2 += value * value;
@@ -140,6 +142,8 @@ class MarketUniverseV2Service {
           peak = Math.max(peak, wealth);
           worst = Math.min(worst, wealth / peak - 1);
         }
+        const pathMean = pathSum / (pathValid || 1);
+        pathVolatilities.push(Math.sqrt(Math.max(0, pathSum2 / (pathValid || 1) - pathMean * pathMean) * 12));
         const annualGrowth = Math.pow(wealth, 12 / monthCount) - 1;
         cagr.push(annualGrowth);
         drawdown.push(worst);
@@ -157,6 +161,14 @@ class MarketUniverseV2Service {
       etfs.push({
         isin, invalidReturns: invalid, meanMonthlyReturn: mean,
         arithmeticAnnualReturn: mean * 12, realizedAnnualVolatility: vol,
+        volatilityReconciliation: {
+          method: 'annualized monthly return standard deviation',
+          pooled: vol,
+          meanAcrossPaths: pathVolatilities.reduce((a, b) => a + b, 0) / pathCount,
+          medianAcrossPaths: quantile(pathVolatilities, .5),
+          p05AcrossPaths: quantile(pathVolatilities, .05),
+          p95AcrossPaths: quantile(pathVolatilities, .95)
+        },
         cagr: { p05: quantile(cagr, .05), p50: quantile(cagr, .5), p95: quantile(cagr, .95) },
         maxDrawdown: { p01: quantile(drawdown, .01), p05: quantile(drawdown, .05), p50: quantile(drawdown, .5) },
         probabilityPositive: positive / pathCount,
