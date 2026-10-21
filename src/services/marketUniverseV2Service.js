@@ -12,6 +12,7 @@ const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
 const { buildMonteCarloV5Foundation, createGenerationManifest, verifyGenerationManifest } = require('./monteCarloV5FoundationService');
+const { auditStylePremiums } = require('./monteCarloV6StylePremiumAuditService');
 const MonteCarloRunManifest = require('../models/MonteCarloRunManifest');
 const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
@@ -259,9 +260,11 @@ class MarketUniverseV2Service {
     }
     const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot: verifiedManifest ? manifestRecord.manifest.factorSnapshot : factorSnapshot,
       run, scenarios: counts, v3Audit, v4Validation, manifestRecord });
+    const v6StylePremiumAudit = auditStylePremiums({manifestRecord,
+      manifestVerification: verifyGenerationManifest(manifestRecord,run)});
     const diagnosticFinished = performance.now();
     return {
-      version: 5, v3Audit, v4Validation, v5Foundation,
+      version: 5, v3Audit, v4Validation, v5Foundation, v6StylePremiumAudit,
       performance: { totalMs: Math.round(diagnosticFinished - diagnosticStarted),
         dbReadMs: Math.round(afterDbRead - beforeDbRead),
         simulationAnalysisMs: Math.round(beforeV3 - afterDbRead),
