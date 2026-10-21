@@ -12,18 +12,32 @@ function stable(value) {
 }
 const sha256 = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 const norm = value => String(value ?? '').trim().toUpperCase();
+const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+const sameArray = (a,b) => Array.isArray(a) && Array.isArray(b) && a.length===b.length && a.every((x,i)=>norm(x)===norm(b[i]));
 function createGenerationManifest({factorSnapshot,macroSnapshot,seed,pathCount,monthCount,assetOrder}) {
   const manifest = {schemaVersion:5,generator:'factor_market_universe_v2',
     seed:Number(seed),pathCount:Number(pathCount),monthCount:Number(monthCount),
     assetOrder:assetOrder.map(norm),factorSnapshot,macroSnapshot};
   return {manifest,sha256:sha256(manifest)};
 }
-function verifyGenerationManifest(record) {
+function verifyGenerationManifest(record, run = null) {
   if(!record)return {status:'UNVERIFIED',reason:'No generation-time manifest exists for this historical run.'};
-  const hash=sha256(record.manifest);
-  return {status:hash===record.manifestSha256?'PASS':'FAIL',
-    recordedSha256:record.manifestSha256,computedSha256:hash,
-    reason:hash===record.manifestSha256?'Generation manifest hash matches stored JSON.':'Manifest hash mismatch.'};
+  const m=record.manifest;
+  if (!m || typeof m!=='object') return {status:'FAIL',reason:'Manifest payload is missing or invalid.'};
+  const hash=sha256(m);
+  const issues=[];
+  if(hash!==record.manifestSha256) issues.push('SHA256_MISMATCH');
+  if(Number(record.schemaVersion)!==5 || m.schemaVersion!==5) issues.push('SCHEMA_VERSION_MISMATCH');
+  if(!m.factorSnapshot || !m.macroSnapshot || !Array.isArray(m.assetOrder)) issues.push('INCOMPLETE_INPUT_SNAPSHOT');
+  if(run) {
+    if(String(record.runId)!==String(run.runId)) issues.push('RUN_ID_MISMATCH');
+    for(const key of ['seed','pathCount','monthCount']) if(Number(m[key])!==Number(run[key])) issues.push(key.toUpperCase()+'_MISMATCH');
+    if(!sameArray(m.assetOrder,run.assetOrder)) issues.push('ASSET_ORDER_MISMATCH');
+    if(Number(run.assetCount)!==m.assetOrder?.length) issues.push('ASSET_COUNT_MISMATCH');
+  }
+  return {status:issues.length?'FAIL':'PASS',recordedSha256:record.manifestSha256,
+    computedSha256:hash,issues,
+    reason:issues.length?'Generation manifest failed integrity or run identity checks.':'Manifest hash, schema and run identity checks passed.'};
 }
 function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, v4Validation, manifestRecord = null }) {
   const factors = (factorSnapshot.factors || []).map(f => ({
@@ -45,7 +59,7 @@ function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, 
     if(!factorIds.has(String(x.factorId))) missingFactorIds.add(String(x.factorId));
   add('ETF_FACTOR_REFERENCES',missingFactorIds.size?'FAIL':'PASS',
     'All ETF exposures must reference an existing factor.',{missingFactorIds:[...missingFactorIds]});
-  const invalidBetas = etfs.flatMap(e=>e.exposures.filter(x=>!Number.isFinite(Number(x.beta)))
+  const invalidBetas = etfs.flatMap(e=>e.exposures.filter(x=>!finite(x.beta))
     .map(x=>({isin:e.isin,factorId:x.factorId,beta:x.beta})));
   add('FINITE_FACTOR_BETAS',invalidBetas.length?'FAIL':'PASS',
     'Factor exposures must be finite.',{invalidBetas});
@@ -57,10 +71,10 @@ function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, 
   add('INCREMENTAL_STYLE_PREMIA','UNVERIFIED',
     'Require source-backed incremental style premium definitions before changing expected returns.',
     {factors:style.map(s=>s.code)});
-  const manifestVerification=verifyGenerationManifest(manifestRecord);
+  const manifestVerification=verifyGenerationManifest(manifestRecord,run);
   add('GENERATION_TIME_MANIFEST',manifestVerification.status,
     'Generation-time manifest must be persisted and its SHA-256 must verify.',manifestVerification);
-  add('MACRO_CONFIG_PROVENANCE',manifestVerification.status==='PASS' && manifestRecord.manifest.macroSnapshot?'PASS':'UNVERIFIED',
+  add('MACRO_CONFIG_PROVENANCE',manifestVerification.status==='FAIL'?'FAIL':manifestVerification.status==='PASS' && manifestRecord.manifest.macroSnapshot?'PASS':'UNVERIFIED',
     'Original macro configuration must be included in the verified generation manifest.');
   add('BOND_FX_INSTRUMENT_METADATA','UNVERIFIED',
     'Verified duration, carry, base currency and hedge metadata are required for a bond/FX engine.');
@@ -73,19 +87,20 @@ function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, 
       currentFactorCount:factors.length,currentEtfCount:etfs.length,
       generationTimeSha256:manifestRecord?.manifestSha256??null,
       provenance:manifestVerification.status==='PASS'?'VERIFIED_GENERATION_TIME_MANIFEST':'CURRENT_LIVE_SNAPSHOT_ONLY',
-      historicallyReproducible:manifestVerification.status==='PASS',
-      caveat:'This hash is not a generation-time manifest and must not be presented as proof of historical reproducibility.'
+      historicallyReproducible:false,
+      generationInputsTraceable:manifestVerification.status==='PASS',
+      caveat:manifestVerification.status==='PASS'?'Generation inputs are authenticated against the stored run metadata. Bit-for-bit replay still requires a pinned runtime version and replay test.':'The current snapshot hash does not authenticate historical generation inputs.'
     },
     semantics:{stylePremia:style, returnConvention:'simple_monthly',
       verifiedIncrementalPremia:false, policy:'No automatic conversion of factor returns or alpha.'},
     scenarioCoverage:SCENARIOS.map(s=>({scenario:s,share:scenarios.find(x=>x.scenario===s)?.share??null})),
     previousValidation:{v4Status:v4Validation?.status??null,v3Certification:v3Audit?.certification?.status??null},
-    checks, status:failures?'FAILED':'FOUNDATIONS_INCOMPLETE',
+    checks, status:failures?'FAILED':manifestVerification.status==='PASS'?'INPUT_PROVENANCE_VERIFIED':'FOUNDATIONS_INCOMPLETE',
     nextReleaseRequirements:[
-      'Persist immutable generation-time factor and macro manifest in versioned storage.',
+      'Pin generator build identity and perform independent seeded replay before claiming full reproducibility.',
       'Establish source-backed incremental style premia and prevent double counting.',
       'Validate bond duration/carry and currency/hedge instrument metadata.',
-      'Add regression tests for manifest determinism and fail-closed economic gates.'
+      'Apply and run automated tests for integrity, run identity and economic gates.'
     ]
   };
 }
