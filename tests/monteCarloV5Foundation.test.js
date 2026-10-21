@@ -19,7 +19,7 @@ describe('Monte Carlo V5 manifest',()=>{
     const dated={...options,factorSnapshot:{...snapshot,factors:[{...snapshot.factors[0],createdAt:new Date('2026-10-21T12:00:00.000Z')}]}};
     const a=createGenerationManifest(dated);
     const stored=JSON.parse(JSON.stringify(a.manifest));
-    expect(verifyGenerationManifest({manifest:stored,manifestSha256:a.sha256}).status).toBe('PASS');
+    expect(verifyGenerationManifest({schemaVersion:5,manifest:stored,manifestSha256:a.sha256}).status).toBe('PASS');
   });
   test('recognizes historical V5 Date hash without modifying immutable record',()=>{
     const dated={...options,factorSnapshot:{...snapshot,factors:[{...snapshot.factors[0],createdAt:new Date('2026-10-21T12:00:00.000Z')}]}};
@@ -27,16 +27,16 @@ describe('Monte Carlo V5 manifest',()=>{
     const stored=JSON.parse(JSON.stringify(a.manifest));
     const historical={...stored,factorSnapshot:{...stored.factorSnapshot,factors:stored.factorSnapshot.factors.map(f=>({...f,createdAt:{}}))}};
     const oldSha=sha256(historical);
-    const result=verifyGenerationManifest({manifest:stored,manifestSha256:oldSha});
+    const result=verifyGenerationManifest({schemaVersion:5,manifest:stored,manifestSha256:oldSha});
     expect(result.status).toBe('PASS');
     expect(result.legacyDateCompatibility).toBe(true);
     expect(result.reason).toMatch(/not authenticated/);
-    expect(verifyGenerationManifest({manifest:{...stored,seed:99},manifestSha256:oldSha}).status).toBe('FAIL');
+    expect(verifyGenerationManifest({schemaVersion:5,manifest:{...stored,seed:99},manifestSha256:oldSha}).status).toBe('FAIL');
   });
   test('detects tampering and missing historical manifests',()=>{
     const a=createGenerationManifest(options);
-    expect(verifyGenerationManifest({manifest:a.manifest,manifestSha256:a.sha256}).status).toBe('PASS');
-    expect(verifyGenerationManifest({manifest:{...a.manifest,seed:43},manifestSha256:a.sha256}).status).toBe('FAIL');
+    expect(verifyGenerationManifest({schemaVersion:5,manifest:a.manifest,manifestSha256:a.sha256}).status).toBe('PASS');
+    expect(verifyGenerationManifest({schemaVersion:5,manifest:{...a.manifest,seed:43},manifestSha256:a.sha256}).status).toBe('FAIL');
     expect(verifyGenerationManifest(null).status).toBe('UNVERIFIED');
   });
   test('rejects manifest attached to the wrong run or with mismatched dimensions',()=>{
