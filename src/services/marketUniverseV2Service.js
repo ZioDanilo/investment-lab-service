@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const { performance } = require('node:perf_hooks');
 const ETF = require('../models/ETF');
 const EtfMacroStatistics = require('../models/EtfMacroStatistics');
 const StructuralProbability = require('../models/StructuralProbability');
@@ -56,6 +57,7 @@ class MarketUniverseV2Service {
 
   // Read-only diagnostics on the persisted active run. No generation, writes or cache mutation.
   static async getMonteCarloDiagnostics() {
+    const diagnosticStarted = performance.now();
     const run = await this.getActiveRun();
     const pathCount = Number(run.pathCount);
     const monthCount = Number(run.monthCount);
@@ -102,9 +104,11 @@ class MarketUniverseV2Service {
       const low = Math.floor(index), high = Math.ceil(index);
       return ordered[low] + (ordered[high] - ordered[low]) * (index - low);
     };
+    const beforeDbRead = performance.now();
     const rows = await MarketUniverseEtfV2.findAll({
       where: { runId: run.runId }, attributes: ['isin', 'returnsBinary', 'valueCount'], raw: true
     });
+    const afterDbRead = performance.now();
     const etfs = [];
     const vectors = new Map();
     for (const row of rows) {
@@ -226,16 +230,25 @@ class MarketUniverseV2Service {
         f.returnMode === 'compounded_return')
       .map(f => ({ code: 'VERIFY_INCREMENTAL_STYLE_PREMIUM', factorCode: f.code,
         note: 'Confirm that expected returns are incremental premiums rather than full equity returns.' }));
+    const beforeV3 = performance.now();
     const v3Audit = await buildMonteCarloV3Audit({
       factorSnapshot,
       etfs, correlations, conditionalCorrelations, scenarios: counts,
       scenarioBytes, pathCount, monthCount
     });
+    const beforeV4 = performance.now();
     const v4Validation = calculateMomentValidation({
       snapshot: factorSnapshot, etfs, correlations, scenarioBytes, intensity, run
     });
+    const diagnosticFinished = performance.now();
     return {
-      version: 4, v3Audit, v4Validation, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
+      version: 4, v3Audit, v4Validation,
+      performance: { totalMs: Math.round(diagnosticFinished - diagnosticStarted),
+        dbReadMs: Math.round(afterDbRead - beforeDbRead),
+        simulationAnalysisMs: Math.round(beforeV3 - afterDbRead),
+        economicAuditMs: Math.round(beforeV4 - beforeV3),
+        momentValidationMs: Math.round(diagnosticFinished - beforeV4) },
+      generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
       readOnly: true, run: { runId: run.runId, seed: run.seed, pathCount, monthCount,
         generatedAt: run.generatedAt, assetCount: run.assetCount },
       conventions: {
