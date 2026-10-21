@@ -114,6 +114,7 @@ class MarketUniverseV2Service {
       let sum = 0, sum2 = 0, invalid = 0, positive = 0;
       const byScenario = SCENARIOS.map(() => ({ n: 0, sum: 0, sum2: 0 }));
       const cagr = [], drawdown = [];
+      const monthlyLosses = [];
       for (let p = 0; p < pathCount; p++) {
         let wealth = 1, peak = 1, worst = 0;
         for (let m = 0; m < monthCount; m++) {
@@ -123,6 +124,7 @@ class MarketUniverseV2Service {
             invalid++; continue;
           }
           sum += value; sum2 += value * value;
+          monthlyLosses.push(value);
           const bucket = byScenario[scenarioBytes[k]];
           bucket.n++; bucket.sum += value; bucket.sum2 += value * value;
           wealth *= 1 + value;
@@ -134,6 +136,13 @@ class MarketUniverseV2Service {
         drawdown.push(worst);
         if (wealth > 1) positive++;
       }
+      monthlyLosses.sort((a, b) => a - b);
+      const expectedShortfall = (tail) => {
+        const count = Math.max(1, Math.ceil(monthlyLosses.length * tail));
+        let lossSum = 0;
+        for (let k = 0; k < count; k++) lossSum += monthlyLosses[k];
+        return lossSum / count;
+      };
       const n = total - invalid, mean = sum / (n || 1);
       const vol = Math.sqrt(Math.max(0, sum2 / (n || 1) - mean * mean) * 12);
       etfs.push({
@@ -142,6 +151,7 @@ class MarketUniverseV2Service {
         cagr: { p05: quantile(cagr, .05), p50: quantile(cagr, .5), p95: quantile(cagr, .95) },
         maxDrawdown: { p01: quantile(drawdown, .01), p05: quantile(drawdown, .05), p50: quantile(drawdown, .5) },
         probabilityPositive: positive / pathCount,
+        monthlyExpectedShortfall: { es95: expectedShortfall(.05), es99: expectedShortfall(.01) },
         byScenario: byScenario.map((b, i) => {
           const mu = b.sum / (b.n || 1);
           return { scenario: SCENARIOS[i], months: b.n, annualizedMeanReturn: mu * 12,
