@@ -1,5 +1,18 @@
 const { MarketUniverseV2Service } = require('../services/marketUniverseV2Service');
 
+const getMonteCarloDiagnostics = async (req, res) => {
+  try {
+    const data = await MarketUniverseV2Service.getMonteCarloDiagnostics();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({
+      success: false, code: error?.code || 'MONTE_CARLO_DIAGNOSTICS_FAILED',
+      error: error?.message || 'Monte Carlo diagnostics failed'
+    });
+  }
+};
+
 const getFactorAudit = async (req, res) => {
   try {
     const data = await MarketUniverseV2Service.getFactorAudit();
@@ -59,6 +72,7 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
 };
 
 module.exports = {
+  getMonteCarloDiagnostics,
   getFactorAudit,
   regenerateMarketUniverseV2,
   getMarketUniverseV2GenerationStatus,
