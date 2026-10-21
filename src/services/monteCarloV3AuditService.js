@@ -123,6 +123,48 @@ async function buildMonteCarloV3Audit({ factorSnapshot, macroSnapshot, etfs, cor
       maxMonths:lengths[lengths.length-1] || 0,
       observedMeanMonths:scenarios.find(s=>s.scenario===SCENARIOS[sc])?.meanSpellMonths ?? null });
   }
+  // Certification gates are conservative: unsupported comparisons stay UNVERIFIED.
+  // An observational pass never certifies calibration or predictive accuracy.
+  const checks = [];
+  const add = (id, status, detail, evidence = null) => checks.push({ id, status, detail, evidence });
+  const invalidReturns = etfs.reduce((sum, e) => sum + Number(e.invalidReturns || 0), 0);
+  add('SIMULATED_RETURNS_FINITE', invalidReturns === 0 ? 'PASS' : 'FAIL',
+    'All persisted ETF monthly returns must be finite and greater than -100%.', { invalidReturns });
+  const invalidVol = etfs.filter(e => !Number.isFinite(e.realizedAnnualVolatility) || e.realizedAnnualVolatility < 0);
+  add('REALIZED_VOLATILITY_FINITE', invalidVol.length ? 'FAIL' : 'PASS',
+    'Annualized realized volatility must be finite and nonnegative.', { invalidEtfs: invalidVol.map(e => e.isin) });
+  const invalidCorrelations = correlations.filter(c => c.correlation != null &&
+    (!Number.isFinite(c.correlation) || Math.abs(c.correlation) > 1 + 1e-8));
+  add('CORRELATION_BOUNDS', invalidCorrelations.length ? 'FAIL' : 'PASS',
+    'Realized Pearson correlations must lie within [-1,1].', { invalidPairs: invalidCorrelations.length });
+  const invalidShares = scenarios.some(s => !Number.isFinite(s.share) || s.share < 0 || s.share > 1);
+  const totalShare = scenarios.reduce((sum, s) => sum + s.share, 0);
+  add('MACRO_SCENARIO_COVERAGE', invalidShares || Math.abs(totalShare - 1) > 1e-8 ? 'FAIL' : 'PASS',
+    'Persisted macro scenarios must cover every simulated month exactly once.', { totalShare });
+  add('FACTOR_PREMIA_SEMANTICS', audit.stylePremia.some(s => s.classification === 'ambiguous_total_or_incremental') ? 'UNVERIFIED' : 'UNVERIFIED',
+    'Factor return mode alone does not prove style premia are incremental; source-level calibration evidence is required.');
+  add('THEORETICAL_RETURN_AND_RISK_CALIBRATION', 'UNVERIFIED',
+    'Live factor parameters may differ from the active run snapshot; intensity-weighted theoretical moments have not been independently reproduced.');
+  add('BOND_DURATION_AND_FX_HEDGE', 'UNVERIFIED',
+    'Instrument duration, currency exposure and hedge status require verified metadata.');
+  add('MACRO_TRANSITION_CALIBRATION', 'UNVERIFIED',
+    'Observed regime persistence has not been compared against a versioned generation-time transition matrix.');
+  add('TAIL_RISK_PREDICTIVE_VALIDITY', 'UNVERIFIED',
+    'Simulated expected shortfall and drawdowns describe the model, not out-of-sample forecasting skill.');
+  const failures = checks.filter(c => c.status === 'FAIL').length;
+  const unverified = checks.filter(c => c.status === 'UNVERIFIED').length;
+  audit.certification = {
+    version: 1,
+    status: failures ? 'FAILED' : unverified ? 'NOT_CERTIFIED' : 'CERTIFIED',
+    checks, passed: checks.filter(c => c.status === 'PASS').length, failures, unverified,
+    interpretation: 'PASS indicates an internal invariant only. Full certification requires all economic calibration gates and independent reproducibility.'
+  };
+  audit.tailRisk = etfs.map(e => ({ isin: e.isin,
+    monthlyExpectedShortfall95: e.monthlyExpectedShortfall?.es95 ?? null,
+    monthlyExpectedShortfall99: e.monthlyExpectedShortfall?.es99 ?? null,
+    maxDrawdownP01: e.maxDrawdown?.p01 ?? null,
+    maxDrawdownP05: e.maxDrawdown?.p05 ?? null,
+    probabilityPositive: e.probabilityPositive }));
   audit.limitations.push('V3 uses the current live factor configuration; the active run may have been generated with an older snapshot.');
   audit.limitations.push('Macro transition settings are not assumed to be historical targets; regime duration percentiles are descriptive.');
   audit.limitations.push('No verified currency-hedging or duration metadata is present in the factor snapshot; these are flagged, never inferred.');
