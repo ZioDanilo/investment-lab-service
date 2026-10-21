@@ -106,8 +106,25 @@ class MarketUniverseV2Service {
         const factorRuntime = await import('investment-lab-core/src/factors/factor-market-universe.js').catch(() => ({}));
         runtime = { ...runtime, ...factorRuntime };
       }
-      if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function' || typeof runtime.generateMonthlyMacroTimeline !== 'function') {
+      if (typeof runtime.generateMonthlyEtfReturnsFromFactors !== 'function' || typeof runtime.generateMonthlyMacroTimeline !== 'function' || typeof runtime.auditFactorMarketUniverse !== 'function') {
         throw Object.assign(new Error('Factor Engine V2 generation runtime is unavailable'), { code: 'MARKET_UNIVERSE_V2_RUNTIME_MISSING', statusCode: 500 });
+      }
+
+      // Fail before allocating or writing any ETF return vectors when the
+      // factor correlation matrices or exposures are structurally invalid.
+      const factorAudit = runtime.auditFactorMarketUniverse(factorSnapshot);
+      console.info('[MU V2 factor preflight]', {
+        valid: factorAudit.valid,
+        checkedEtfScenarios: factorAudit.etfs.length,
+        errors: factorAudit.errors,
+        warnings: factorAudit.warnings
+      });
+      if (!factorAudit.valid) {
+        throw Object.assign(new Error('Factor Market Universe preflight failed'), {
+          code: 'MARKET_UNIVERSE_V2_FACTOR_PREFLIGHT_FAILED',
+          statusCode: 422,
+          details: factorAudit.errors
+        });
       }
 
       if (!run) {
