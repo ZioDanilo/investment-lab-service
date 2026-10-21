@@ -13,6 +13,7 @@ const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseS
 const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
 const { buildMonteCarloV5Foundation, createGenerationManifest, verifyGenerationManifest } = require('./monteCarloV5FoundationService');
 const { auditStylePremiums } = require('./monteCarloV6StylePremiumAuditService');
+const { calibrateReturnsV6 } = require('./monteCarloV6ReturnCalibrationService');
 const MonteCarloRunManifest = require('../models/MonteCarloRunManifest');
 const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
@@ -33,6 +34,20 @@ const bufferToFloat32 = (value) => {
 };
 
 class MarketUniverseV2Service {
+  static async getReturnCalibrationV6() {
+    const run = await this.getActiveRun();
+    let manifestRecord = null;
+    try {
+      manifestRecord = await MonteCarloRunManifest.findByPk(run.runId, { raw: true });
+    } catch (error) {
+      if (error?.parent?.code !== '42P01') throw error;
+    }
+    return calibrateReturnsV6({
+      manifestRecord,
+      manifestVerification: verifyGenerationManifest(manifestRecord, run)
+    });
+  }
+
   static async getFactorAudit() {
     const snapshotRaw = await FactorMarketUniverseSnapshotService.build();
     const operationalEtfs = snapshotRaw.etfs.filter((etf) =>
