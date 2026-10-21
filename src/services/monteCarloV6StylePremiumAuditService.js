@@ -66,10 +66,42 @@ function auditStylePremiums({manifestRecord, manifestVerification}) {
     }));
     return {isin:normalize(e.isin),scenarios,warning:'Annualized arithmetic contributions are monthly locations times 12, not CAGR; scenario intensity and stochastic shocks are excluded.'};
   });
+  // V6 reconciliation: deterministic accounting and a zero-style counterfactual.
+  // A zero-style scenario is a sensitivity check, not a recommended calibration.
+  const reconciliation = decomposition.map(e => {
+    const scenarios = Object.fromEntries(SCENARIOS.map(scenario => {
+      const row = e.scenarios[scenario];
+      const p = row.annualizedArithmeticContributions;
+      const withoutStyle = row.complete ? p.market + p.other + p.specificAlpha : null;
+      const reconstructed = row.complete ? withoutStyle + p.style : null;
+      const discrepancy = reconstructed === null ? null : reconstructed - p.total;
+      const marketAndStyle = row.factors.some(f => f.group === 'market') &&
+        row.factors.some(f => f.group === 'style');
+      return [scenario,{
+        complete:row.complete,
+        configuredAnnualizedArithmetic:p.total,
+        withoutStyleAnnualizedArithmetic:withoutStyle,
+        incrementalStyleAnnualizedArithmetic:p.style,
+        reconstructionDifference:discrepancy,
+        accountingCheck:row.complete && Math.abs(discrepancy) < 1e-10 ? 'PASS' : 'UNVERIFIED',
+        marketStyleCoExposure:marketAndStyle,
+        premiumSemantics:'NOT_ESTABLISHED'
+      }];
+    }));
+    return {isin:e.isin,scenarios};
+  });
+  const reconciliationSummary = {
+    etfCount:reconciliation.length,
+    scenarioCount:SCENARIOS.length,
+    completeScenarioRows:reconciliation.reduce((n,e)=>n+SCENARIOS.filter(s=>e.scenarios[s].complete).length,0),
+    arithmeticIdentity:'total = market + style + other + specificAlpha',
+    counterfactual:'style factor contribution set to zero; market, other factors and specific alpha unchanged',
+    limitation:'This is a deterministic location sensitivity, not a Monte Carlo replay or evidence that the style factor premium is independent of market returns.'
+  };
   return {version:6,phase:'STYLE_PREMIUM_PROVENANCE',readOnly:true,
     status:authenticated?'EVIDENCE_REQUIRED':'BLOCKED_UNVERIFIED_MANIFEST',
     manifestSha256:authenticated?manifestRecord.manifestSha256:null,
-    factors:rows,etfExposures:exposures,returnDecomposition:decomposition,engineFormula:'monthly ETF return = sum(beta * monthly factor return) + annual specific alpha / 12 + residual shock * monthly residual volatility',
+    factors:rows,etfExposures:exposures,returnDecomposition:decomposition,reconciliation,reconciliationSummary,engineFormula:'monthly ETF return = sum(beta * monthly factor return) + annual specific alpha / 12 + residual shock * monthly residual volatility',
     checks:[{id:'GENERATION_INPUT_AUTHENTICATED',status:authenticated?'PASS':'UNVERIFIED'},
       {id:'STYLE_PREMIUM_INCREMENTAL_EVIDENCE',status:'UNVERIFIED'},
       {id:'STYLE_PREMIUM_DOUBLE_COUNTING_EXCLUDED',status:'UNVERIFIED'}],
