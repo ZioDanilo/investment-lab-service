@@ -445,7 +445,29 @@ class MarketUniverseV2Service {
         const vector = returnsByIsin.get(isin);
         return { runId: run.runId, etfId: etf.id, isin, returnsBinary: float32ToBuffer(vector), valueCount: totalValues };
       });
-      await MarketUniverseEtfV2.bulkCreate(rows, { validate: true });
+      // Persist each binary vector separately. A single bulk INSERT with 26 large
+      // bytea literals can saturate the PostgreSQL connection and stall at 95%.
+      // Keep the prior ACTIVE run untouched until every ETF is persisted.
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const startedAt = performance.now();
+        try {
+          await MarketUniverseEtfV2.create(row, { validate: true });
+        } catch (error) {
+          console.error('[MU V2 ETF persistence failed]', {
+            runId: run.runId, isin: row.isin, index: index + 1,
+            total: rows.length, error: error.message
+          });
+          throw error;
+        }
+        const progress = 95 + ((index + 1) / rows.length) * 4;
+        await run.update({ generationProgress: progress });
+        console.info('[MU V2 ETF persisted]', {
+          runId: run.runId, isin: row.isin, index: index + 1,
+          total: rows.length, durationMs: Math.round(performance.now() - startedAt),
+          progressPercentage: Number(progress.toFixed(2))
+        });
+      }
       await run.update({
         scenarioBinary: Buffer.from(scenarios),
         intensityBinary: float32ToBuffer(intensities),
