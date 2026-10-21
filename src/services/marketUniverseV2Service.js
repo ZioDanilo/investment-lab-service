@@ -232,6 +232,13 @@ class MarketUniverseV2Service {
         f.returnMode === 'compounded_return')
       .map(f => ({ code: 'VERIFY_INCREMENTAL_STYLE_PREMIUM', factorCode: f.code,
         note: 'Confirm that expected returns are incremental premiums rather than full equity returns.' }));
+    let manifestRecord = null;
+    try {
+      manifestRecord = await MonteCarloRunManifest.findByPk(run.runId, { raw:true });
+    } catch(error) {
+      if(error?.parent?.code !== '42P01') throw error;
+      // Migration not deployed yet; historical runs remain inspectable.
+    }
     const beforeV3 = performance.now();
     const v3Audit = await buildMonteCarloV3Audit({
       factorSnapshot,
@@ -239,15 +246,16 @@ class MarketUniverseV2Service {
       scenarioBytes, pathCount, monthCount
     });
     const beforeV4 = performance.now();
+    const verifiedManifest = manifestRecord &&
+      require('./monteCarloV5FoundationService').verifyGenerationManifest(manifestRecord).status === 'PASS';
     const v4Validation = calculateMomentValidation({
-      snapshot: factorSnapshot, etfs, correlations, scenarioBytes, intensity, run
+      snapshot: verifiedManifest ? manifestRecord.manifest.factorSnapshot : factorSnapshot,
+      etfs, correlations, scenarioBytes, intensity, run
     });
-    let manifestRecord = null;
-    try {
-      manifestRecord = await MonteCarloRunManifest.findByPk(run.runId, { raw:true });
-    } catch(error) {
-      if(error?.parent?.code !== '42P01') throw error;
-      // Migration not deployed yet; historical runs remain inspectable.
+    if(verifiedManifest) {
+      v4Validation.configurationProvenance = 'VERIFIED_GENERATION_TIME_MANIFEST';
+      v4Validation.generationTimeSha256 = manifestRecord.manifestSha256;
+      // Mathematical consistency still requires formal statistical acceptance tests.
     }
     const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios: counts, v3Audit, v4Validation, manifestRecord });
     const diagnosticFinished = performance.now();
