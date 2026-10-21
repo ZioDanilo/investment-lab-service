@@ -37,9 +37,12 @@ function validateHistoricalFactorPremiums({rows,source,definition,benchmark,curr
   if(definition!=='long_short_excess')throw Object.assign(new Error('Only documented long_short_excess factor series are accepted; ETF total returns are not factor premiums'),{statusCode:400});
   const sorted=checkRows(rows);
   const market=sorted.map(r=>r.marketExcess),n=sorted.length;
+  if(variance(market)<=1e-16)throw Object.assign(new Error('Market excess series has zero variance'),{statusCode:400});
   const target={MOMENTUM:.035,VALUE:.012,SIZE_SMALL_CAP:.01};
   const factors=FACTORS.map(code=>{
-    const x=sorted.map(r=>r[code]),beta=covariance(x,market)/variance(market);
+    const x=sorted.map(r=>r[code]);
+    if(variance(x)<=1e-16)throw Object.assign(new Error(code+' series has zero variance'),{statusCode:400});
+    const beta=covariance(x,market)/variance(market);
     const alpha=x.map((v,i)=>v-beta*market[i]),premium=annualized(x);
     const se=nwStandardError(x),z=(premium-target[code])/se;
     const windows=[];for(let i=120;i<=n;i++)windows.push(annualized(x.slice(i-120,i)));
