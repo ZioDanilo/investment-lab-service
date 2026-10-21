@@ -1,5 +1,19 @@
 const { MarketUniverseV2Service } = require('../services/marketUniverseV2Service');
 
+const getFactorAudit = async (req, res) => {
+  try {
+    const data = await MarketUniverseV2Service.getFactorAudit();
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    return res.status(Number(error?.statusCode) || 500).json({
+      success: false,
+      code: error?.code || 'FACTOR_AUDIT_FAILED',
+      error: error?.message || 'Factor audit failed'
+    });
+  }
+};
+
 const regenerateMarketUniverseV2 = async (req, res) => {
   try {
     const data = await MarketUniverseV2Service.startRegeneration(req.body || {});
@@ -45,6 +59,7 @@ const buildBinaryPortfolioProjectionV2 = async (req, res) => {
 };
 
 module.exports = {
+  getFactorAudit,
   regenerateMarketUniverseV2,
   getMarketUniverseV2GenerationStatus,
   buildBinaryPortfolioProjectionV2
