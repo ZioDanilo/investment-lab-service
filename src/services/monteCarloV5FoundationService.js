@@ -5,12 +5,23 @@ const { createHash } = require('node:crypto');
 const STYLE = new Set(['VALUE','MOMENTUM','QUALITY','LOW_VOLATILITY','GROWTH']);
 const SCENARIOS = ['expansion','soft_landing','recession','stagflation'];
 function stable(value) {
+  if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(stable);
   if (value && typeof value === 'object') return Object.fromEntries(
     Object.keys(value).sort().filter(k => value[k] !== undefined).map(k => [k,stable(value[k])]));
   return value;
 }
 const sha256 = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
+// Compatibility with V5 manifests created before Date serialization was normalized.
+// The old hash represented Date instances as {}, while PostgreSQL JSONB stored ISO strings.
+// Only recognize known Sequelize timestamp fields, and never rewrite the immutable manifest.
+const LEGACY_DATE_KEYS = new Set(['createdAt','updatedAt','deletedAt','validatedAt']);
+function legacyDateShape(value) {
+  if (Array.isArray(value)) return value.map(legacyDateShape);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) =>
+    [k, LEGACY_DATE_KEYS.has(k) && typeof v === 'string' && /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(v) ? {} : legacyDateShape(v)]));
+  return value;
+}
 const norm = value => String(value ?? '').trim().toUpperCase();
 const finite = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 const sameArray = (a,b) => Array.isArray(a) && Array.isArray(b) && a.length===b.length && a.every((x,i)=>norm(x)===norm(b[i]));
@@ -26,7 +37,9 @@ function verifyGenerationManifest(record, run = null) {
   if (!m || typeof m!=='object') return {status:'FAIL',reason:'Manifest payload is missing or invalid.'};
   const hash=sha256(m);
   const issues=[];
-  if(hash!==record.manifestSha256) issues.push('SHA256_MISMATCH');
+  const legacyHash = hash === record.manifestSha256 ? null : sha256(legacyDateShape(m));
+  const legacyDateCompatibility = hash !== record.manifestSha256 && legacyHash === record.manifestSha256;
+  if(hash!==record.manifestSha256 && !legacyDateCompatibility) issues.push('SHA256_MISMATCH');
   if(Number(record.schemaVersion)!==5 || m.schemaVersion!==5) issues.push('SCHEMA_VERSION_MISMATCH');
   if(!m.factorSnapshot || !m.macroSnapshot || !Array.isArray(m.assetOrder)) issues.push('INCOMPLETE_INPUT_SNAPSHOT');
   if(run) {
@@ -36,8 +49,8 @@ function verifyGenerationManifest(record, run = null) {
     if(Number(run.assetCount)!==m.assetOrder?.length) issues.push('ASSET_COUNT_MISMATCH');
   }
   return {status:issues.length?'FAIL':'PASS',recordedSha256:record.manifestSha256,
-    computedSha256:hash,issues,
-    reason:issues.length?'Generation manifest failed integrity or run identity checks.':'Manifest hash, schema and run identity checks passed.'};
+    computedSha256:hash,legacyDateCompatibility,legacyComputedSha256:legacyDateCompatibility?legacyHash:null,issues,
+    reason:issues.length?'Generation manifest failed integrity or run identity checks.':legacyDateCompatibility?'Legacy V5 hash verified after restoring the original Date serialization behavior; timestamp fields were not authenticated by that historical hash.':'Manifest hash, schema and run identity checks passed.'};
 }
 function buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios, v3Audit, v4Validation, manifestRecord = null }) {
   const factors = (factorSnapshot.factors || []).map(f => ({
