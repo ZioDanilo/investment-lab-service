@@ -29,10 +29,47 @@ function auditStylePremiums({manifestRecord, manifestVerification}) {
       doubleCountingConfirmed:false,
       note:'Co-exposure identifies candidates for review; it does not prove double counting.'};
   }).filter(x=>x.styleFactors.length);
+  // Reconstruct deterministic monthly location using the same conventions as
+  // investment-lab-core/src/factors/factor-market-universe.js.
+  // This is an accounting decomposition, NOT proof of premium provenance.
+  const monthlyLocation = (factor, scenario) => {
+    const annual = numberOrNull(factor?.statistics?.[scenario]?.expectedReturn);
+    if (annual === null) return null;
+    const mode = factor.returnMode || 'compounded_return';
+    if (mode === 'additive_shock') return annual / 12;
+    return mode === 'compounded_return' && annual > -1 ? Math.pow(1 + annual, 1 / 12) - 1 : null;
+  };
+  const isMarket = code => /^(EQUITY|MARKET|MSCI_WORLD|WORLD|GLOBAL_EQUITY|EQUITY_MARKET)$/i.test(code);
+  const decomposition = etfs.filter(e => (e.exposures || []).some(x => STYLES.has(normalize(factorById.get(String(x.factorId))?.code)))).map(e => {
+    const annualAlpha = numberOrNull(e.specificRisk?.alpha) ?? 0;
+    const scenarios = Object.fromEntries(SCENARIOS.map(scenario => {
+      const parts = {market:0,style:0,other:0};
+      const details = [];
+      let incomplete = false;
+      for (const exposure of e.exposures || []) {
+        const factor = factorById.get(String(exposure.factorId));
+        const beta = numberOrNull(exposure.beta);
+        const location = monthlyLocation(factor, scenario);
+        if (!factor || beta === null || location === null) { incomplete = true; continue; }
+        const code = normalize(factor.code);
+        const group = STYLES.has(code) ? 'style' : isMarket(code) ? 'market' : 'other';
+        const monthlyContribution = beta * location;
+        parts[group] += monthlyContribution;
+        details.push({factorCode:code,beta,monthlyFactorLocation:location,monthlyContribution,group});
+      }
+      const alpha = annualAlpha / 12;
+      const total = incomplete ? null : parts.market + parts.style + parts.other + alpha;
+      return [scenario,{annualizedArithmeticContributions:{
+        market:parts.market*12,style:parts.style*12,other:parts.other*12,
+        specificAlpha:annualAlpha,total:total === null ? null : total*12
+      },monthlyExpectedLocation:total,complete:!incomplete,factors:details}];
+    }));
+    return {isin:normalize(e.isin),scenarios,warning:'Annualized arithmetic contributions are monthly locations times 12, not CAGR; scenario intensity and stochastic shocks are excluded.'};
+  });
   return {version:6,phase:'STYLE_PREMIUM_PROVENANCE',readOnly:true,
     status:authenticated?'EVIDENCE_REQUIRED':'BLOCKED_UNVERIFIED_MANIFEST',
     manifestSha256:authenticated?manifestRecord.manifestSha256:null,
-    factors:rows,etfExposures:exposures,
+    factors:rows,etfExposures:exposures,returnDecomposition:decomposition,engineFormula:'monthly ETF return = sum(beta * monthly factor return) + annual specific alpha / 12 + residual shock * monthly residual volatility',
     checks:[{id:'GENERATION_INPUT_AUTHENTICATED',status:authenticated?'PASS':'UNVERIFIED'},
       {id:'STYLE_PREMIUM_INCREMENTAL_EVIDENCE',status:'UNVERIFIED'},
       {id:'STYLE_PREMIUM_DOUBLE_COUNTING_EXCLUDED',status:'UNVERIFIED'}],
