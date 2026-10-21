@@ -169,8 +169,53 @@ class MarketUniverseV2Service {
           correlation: denom > 0 ? Math.max(-1, Math.min(1, covariance / denom)) : null });
       }
     }
+    // Conditional correlations expose diversification breakdowns hidden by pooled averages.
+    const conditionalCorrelations = [];
+    for (let i = 0; i < orderedIsins.length; i++) {
+      const a = vectors.get(orderedIsins[i]);
+      for (let j = i + 1; j < orderedIsins.length; j++) {
+        const b = vectors.get(orderedIsins[j]);
+        for (let sc = 0; sc < SCENARIOS.length; sc++) {
+          let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+          for (let k = 0; k < total; k++) {
+            if (scenarioBytes[k] !== sc) continue;
+            const x = a[k], y = b[k];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            n++; sx += x; sy += y; sxx += x*x; syy += y*y; sxy += x*y;
+          }
+          const dx = sxx - sx*sx/(n||1), dy = syy - sy*sy/(n||1);
+          conditionalCorrelations.push({ isinA: orderedIsins[i], isinB: orderedIsins[j],
+            scenario: SCENARIOS[sc], observations: n,
+            correlation: n > 2 && dx > 0 && dy > 0 ? Math.max(-1, Math.min(1, (sxy-sx*sy/n)/Math.sqrt(dx*dy))) : null });
+        }
+      }
+    }
+    // Identify indistinguishable factor specifications before changing calibration.
+    const factorSpecificationWarnings = [];
+    const factorSnapshot = await FactorMarketUniverseSnapshotService.build();
+    const signature = (etf) => JSON.stringify({
+      exposures: (etf.exposures || []).map(e => [String(e.factorId), Number(e.beta)]).sort((a,b)=>a[0].localeCompare(b[0])),
+      alpha: Number(etf.specificRisk?.alpha || 0),
+      residualVolatility: Number(etf.specificRisk?.residualVolatility ?? etf.specificRisk?.annualizedVolatility ?? 0)
+    });
+    const activeIsins = new Set(orderedIsins);
+    const matching = factorSnapshot.etfs.filter(e => activeIsins.has(normalizeIsin(e.isin)));
+    for (let i = 0; i < matching.length; i++) {
+      for (let j = i+1; j < matching.length; j++) {
+        if (signature(matching[i]) === signature(matching[j])) {
+          factorSpecificationWarnings.push({ code: 'IDENTICAL_FACTOR_SPECIFICATION',
+            isinA: normalizeIsin(matching[i].isin), isinB: normalizeIsin(matching[j].isin),
+            note: 'Identical current factor exposures, alpha and residual volatility; independent residual draws can still produce different paths.' });
+        }
+      }
+    }
+    const stylePremiaWarnings = factorSnapshot.factors
+      .filter(f => ['VALUE','MOMENTUM','QUALITY','LOW_VOLATILITY','GROWTH'].includes(String(f.code).toUpperCase()) &&
+        f.returnMode === 'compounded_return')
+      .map(f => ({ code: 'VERIFY_INCREMENTAL_STYLE_PREMIUM', factorCode: f.code,
+        note: 'Confirm that expected returns are incremental premiums rather than full equity returns.' }));
     return {
-      version: 1, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
+      version: 2, generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
       readOnly: true, run: { runId: run.runId, seed: run.seed, pathCount, monthCount,
         generatedAt: run.generatedAt, assetCount: run.assetCount },
       conventions: {
@@ -182,7 +227,8 @@ class MarketUniverseV2Service {
         correlations: 'Pearson on pooled simulated monthly returns; includes macro-regime variation',
         caveat: 'Diagnostics describe persisted simulations, not theoretical factor targets or historical calibration.'
       },
-      scenarios: counts, invalidIntensities, etfs, correlations
+      scenarios: counts, invalidIntensities, etfs, correlations, conditionalCorrelations,
+      factorSpecificationWarnings, stylePremiaWarnings
     };
   }
 
