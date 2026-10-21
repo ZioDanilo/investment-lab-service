@@ -11,6 +11,7 @@ const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
 const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
 const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
+const { buildMonteCarloV5Foundation } = require('./monteCarloV5FoundationService');
 const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL } = require('../utils/marketUniverseBinaryTransport');
@@ -240,9 +241,10 @@ class MarketUniverseV2Service {
     const v4Validation = calculateMomentValidation({
       snapshot: factorSnapshot, etfs, correlations, scenarioBytes, intensity, run
     });
+    const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot, run, scenarios: counts, v3Audit, v4Validation });
     const diagnosticFinished = performance.now();
     return {
-      version: 4, v3Audit, v4Validation,
+      version: 5, v3Audit, v4Validation, v5Foundation,
       performance: { totalMs: Math.round(diagnosticFinished - diagnosticStarted),
         dbReadMs: Math.round(afterDbRead - beforeDbRead),
         simulationAnalysisMs: Math.round(beforeV3 - afterDbRead),
