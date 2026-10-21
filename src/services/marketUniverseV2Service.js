@@ -91,7 +91,7 @@ class MarketUniverseV2Service {
       c.meanIntensity /= c.months || 1;
       c.spells = spellLengths[i].length;
       c.meanSpellMonths = spellLengths[i].reduce((a, b) => a + b, 0) / (c.spells || 1);
-      c.maxSpellMonths = Math.max(0, ...spellLengths[i]);
+      c.maxSpellMonths = spellLengths[i].reduce((max, length) => Math.max(max, length), 0);
     });
     const quantile = (values, q) => {
       if (!values.length) return null;
