@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const { performance } = require('node:perf_hooks');
 const ETF = require('../models/ETF');
 const EtfMacroStatistics = require('../models/EtfMacroStatistics');
 const StructuralProbability = require('../models/StructuralProbability');
@@ -9,6 +10,12 @@ const MonteCarloGlobalProperty = require('../models/MonteCarloGlobalProperty');
 const MarketUniverseRunV2 = require('../models/MarketUniverseRunV2');
 const MarketUniverseEtfV2 = require('../models/MarketUniverseEtfV2');
 const { FactorMarketUniverseSnapshotService } = require('./factorMarketUniverseSnapshotService');
+const { buildMonteCarloV3Audit } = require('./monteCarloV3AuditService');
+const { buildMonteCarloV5Foundation, createGenerationManifest, verifyGenerationManifest } = require('./monteCarloV5FoundationService');
+const { auditStylePremiums } = require('./monteCarloV6StylePremiumAuditService');
+const { calibrateReturnsV6 } = require('./monteCarloV6ReturnCalibrationService');
+const MonteCarloRunManifest = require('../models/MonteCarloRunManifest');
+const { calculateMomentValidation } = require('./monteCarloMomentValidationService');
 const { buildMonteCarloSnapshot } = require('../utils/monteCarloSnapshot');
 const { encodeMarketUniverseBinary, PAYLOAD_TYPE_FULL } = require('../utils/marketUniverseBinaryTransport');
 const marketUniverseV2Cache = require('./marketUniverseV2Cache');
@@ -27,6 +34,286 @@ const bufferToFloat32 = (value) => {
 };
 
 class MarketUniverseV2Service {
+  static async getReturnCalibrationV6() {
+    const run = await this.getActiveRun();
+    let manifestRecord = null;
+    try {
+      manifestRecord = await MonteCarloRunManifest.findByPk(run.runId, { raw: true });
+    } catch (error) {
+      if (error?.parent?.code !== '42P01') throw error;
+    }
+    return calibrateReturnsV6({
+      manifestRecord,
+      manifestVerification: verifyGenerationManifest(manifestRecord, run)
+    });
+  }
+
+  static async getFactorAudit() {
+    const snapshotRaw = await FactorMarketUniverseSnapshotService.build();
+    const operationalEtfs = snapshotRaw.etfs.filter((etf) =>
+      etf.exposures?.length > 0 && etf.specificRisk &&
+      ['ready', 'review_required'].includes(String(etf.validation?.status || ''))
+    );
+    const runtime = await import('investment-lab-core');
+    if (typeof runtime.auditFactorMarketUniverse !== 'function') {
+      throw Object.assign(new Error('Updated investment-lab-core audit export is unavailable'), {
+        code: 'FACTOR_AUDIT_RUNTIME_MISSING', statusCode: 503
+      });
+    }
+    const report = runtime.auditFactorMarketUniverse({
+      ...snapshotRaw,
+      etfs: operationalEtfs.map(etf => ({ ...etf, ready: true }))
+    });
+    return {
+      ...report,
+      generatedAt: new Date().toISOString(),
+      factorCount: snapshotRaw.factors.length,
+      etfCount: operationalEtfs.length
+    };
+  }
+
+
+  // Read-only diagnostics on the persisted active run. No generation, writes or cache mutation.
+  static async getMonteCarloDiagnostics() {
+    const diagnosticStarted = performance.now();
+    const run = await this.getActiveRun();
+    const pathCount = Number(run.pathCount);
+    const monthCount = Number(run.monthCount);
+    const total = pathCount * monthCount;
+    if (!Number.isSafeInteger(total) || total <= 0 || pathCount < 1 || monthCount < 2) {
+      throw Object.assign(new Error('Invalid active run geometry'), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_GEOMETRY' });
+    }
+    const scenarioBytes = Buffer.from(run.scenarioBinary || []);
+    const intensity = bufferToFloat32(run.intensityBinary);
+    if (scenarioBytes.length !== total || intensity.length !== total) {
+      throw Object.assign(new Error('Invalid macro timeline geometry'), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_MACRO' });
+    }
+    const counts = SCENARIOS.map((scenario) => ({ scenario, months: 0, share: 0, spells: 0, meanSpellMonths: 0, maxSpellMonths: 0, meanIntensity: 0 }));
+    const spellLengths = SCENARIOS.map(() => []);
+    let invalidIntensities = 0;
+    for (let p = 0; p < pathCount; p++) {
+      let previous = -1, length = 0;
+      for (let m = 0; m < monthCount; m++) {
+        const k = p * monthCount + m;
+        const sc = scenarioBytes[k];
+        if (sc >= SCENARIOS.length) throw Object.assign(new Error('Unknown scenario code'), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_SCENARIO' });
+        counts[sc].months++;
+        if (Number.isFinite(intensity[k])) counts[sc].meanIntensity += intensity[k];
+        else invalidIntensities++;
+        if (sc === previous) length++;
+        else {
+          if (previous >= 0) spellLengths[previous].push(length);
+          previous = sc; length = 1;
+        }
+      }
+      if (previous >= 0) spellLengths[previous].push(length);
+    }
+    counts.forEach((c, i) => {
+      c.share = c.months / total;
+      c.meanIntensity /= c.months || 1;
+      c.spells = spellLengths[i].length;
+      c.meanSpellMonths = spellLengths[i].reduce((a, b) => a + b, 0) / (c.spells || 1);
+      c.maxSpellMonths = spellLengths[i].reduce((max, length) => Math.max(max, length), 0);
+    });
+    const quantile = (values, q) => {
+      if (!values.length) return null;
+      const ordered = values.slice().sort((a, b) => a - b);
+      const index = (ordered.length - 1) * q;
+      const low = Math.floor(index), high = Math.ceil(index);
+      return ordered[low] + (ordered[high] - ordered[low]) * (index - low);
+    };
+    const beforeDbRead = performance.now();
+    const rows = await MarketUniverseEtfV2.findAll({
+      where: { runId: run.runId }, attributes: ['isin', 'returnsBinary', 'valueCount'], raw: true
+    });
+    const afterDbRead = performance.now();
+    const etfs = [];
+    const vectors = new Map();
+    for (const row of rows) {
+      const isin = normalizeIsin(row.isin);
+      const v = bufferToFloat32(row.returnsBinary);
+      if (v.length !== total || Number(row.valueCount) !== total) {
+        throw Object.assign(new Error('Invalid ETF vector geometry: ' + isin), { statusCode: 409, code: 'INVALID_DIAGNOSTIC_ETF_GEOMETRY' });
+      }
+      let sum = 0, sum2 = 0, invalid = 0, positive = 0;
+      const byScenario = SCENARIOS.map(() => ({ n: 0, sum: 0, sum2: 0 }));
+      const cagr = [], drawdown = [], pathVolatilities = [];
+      const monthlyLosses = [];
+      for (let p = 0; p < pathCount; p++) {
+        let wealth = 1, peak = 1, worst = 0;
+        let pathSum = 0, pathSum2 = 0, pathValid = 0;
+        for (let m = 0; m < monthCount; m++) {
+          const k = p * monthCount + m;
+          const value = v[k];
+          if (!Number.isFinite(value) || value <= -1) {
+            invalid++; continue;
+          }
+          sum += value; sum2 += value * value;
+          pathSum += value; pathSum2 += value * value; pathValid++;
+          monthlyLosses.push(value);
+          const bucket = byScenario[scenarioBytes[k]];
+          bucket.n++; bucket.sum += value; bucket.sum2 += value * value;
+          wealth *= 1 + value;
+          peak = Math.max(peak, wealth);
+          worst = Math.min(worst, wealth / peak - 1);
+        }
+        const pathMean = pathSum / (pathValid || 1);
+        pathVolatilities.push(Math.sqrt(Math.max(0, pathSum2 / (pathValid || 1) - pathMean * pathMean) * 12));
+        const annualGrowth = Math.pow(wealth, 12 / monthCount) - 1;
+        cagr.push(annualGrowth);
+        drawdown.push(worst);
+        if (wealth > 1) positive++;
+      }
+      monthlyLosses.sort((a, b) => a - b);
+      const expectedShortfall = (tail) => {
+        const count = Math.max(1, Math.ceil(monthlyLosses.length * tail));
+        let lossSum = 0;
+        for (let k = 0; k < count; k++) lossSum += monthlyLosses[k];
+        return lossSum / count;
+      };
+      const n = total - invalid, mean = sum / (n || 1);
+      const vol = Math.sqrt(Math.max(0, sum2 / (n || 1) - mean * mean) * 12);
+      etfs.push({
+        isin, invalidReturns: invalid, meanMonthlyReturn: mean,
+        arithmeticAnnualReturn: mean * 12, realizedAnnualVolatility: vol,
+        volatilityReconciliation: {
+          method: 'annualized monthly return standard deviation',
+          pooled: vol,
+          meanAcrossPaths: pathVolatilities.reduce((a, b) => a + b, 0) / pathCount,
+          medianAcrossPaths: quantile(pathVolatilities, .5),
+          p05AcrossPaths: quantile(pathVolatilities, .05),
+          p95AcrossPaths: quantile(pathVolatilities, .95)
+        },
+        cagr: { p05: quantile(cagr, .05), p50: quantile(cagr, .5), p95: quantile(cagr, .95) },
+        maxDrawdown: { p01: quantile(drawdown, .01), p05: quantile(drawdown, .05), p50: quantile(drawdown, .5) },
+        probabilityPositive: positive / pathCount,
+        monthlyExpectedShortfall: { es95: expectedShortfall(.05), es99: expectedShortfall(.01) },
+        byScenario: byScenario.map((b, i) => {
+          const mu = b.sum / (b.n || 1);
+          return { scenario: SCENARIOS[i], months: b.n, annualizedMeanReturn: mu * 12,
+            annualizedVolatility: Math.sqrt(Math.max(0, b.sum2 / (b.n || 1) - mu * mu) * 12) };
+        })
+      });
+      vectors.set(isin, v);
+    }
+    // Pairwise realized correlations; retain all pairs for reproducibility.
+    const correlations = [];
+    const orderedIsins = etfs.map(e => e.isin);
+    for (let i = 0; i < orderedIsins.length; i++) {
+      const a = vectors.get(orderedIsins[i]);
+      for (let j = i + 1; j < orderedIsins.length; j++) {
+        const b = vectors.get(orderedIsins[j]);
+        let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+        for (let k = 0; k < total; k++) {
+          const x = a[k], y = b[k];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+          n++; sx += x; sy += y; sxx += x*x; syy += y*y; sxy += x*y;
+        }
+        const covariance = sxy - sx * sy / (n || 1);
+        const denom = Math.sqrt(Math.max(0, (sxx - sx*sx/(n||1)) * (syy - sy*sy/(n||1))));
+        correlations.push({ isinA: orderedIsins[i], isinB: orderedIsins[j],
+          correlation: denom > 0 ? Math.max(-1, Math.min(1, covariance / denom)) : null });
+      }
+    }
+    // Conditional correlations expose diversification breakdowns hidden by pooled averages.
+    const conditionalCorrelations = [];
+    for (let i = 0; i < orderedIsins.length; i++) {
+      const a = vectors.get(orderedIsins[i]);
+      for (let j = i + 1; j < orderedIsins.length; j++) {
+        const b = vectors.get(orderedIsins[j]);
+        for (let sc = 0; sc < SCENARIOS.length; sc++) {
+          let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+          for (let k = 0; k < total; k++) {
+            if (scenarioBytes[k] !== sc) continue;
+            const x = a[k], y = b[k];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+            n++; sx += x; sy += y; sxx += x*x; syy += y*y; sxy += x*y;
+          }
+          const dx = sxx - sx*sx/(n||1), dy = syy - sy*sy/(n||1);
+          conditionalCorrelations.push({ isinA: orderedIsins[i], isinB: orderedIsins[j],
+            scenario: SCENARIOS[sc], observations: n,
+            correlation: n > 2 && dx > 0 && dy > 0 ? Math.max(-1, Math.min(1, (sxy-sx*sy/n)/Math.sqrt(dx*dy))) : null });
+        }
+      }
+    }
+    // Identify indistinguishable factor specifications before changing calibration.
+    const factorSpecificationWarnings = [];
+    const factorSnapshot = await FactorMarketUniverseSnapshotService.build();
+    const signature = (etf) => JSON.stringify({
+      exposures: (etf.exposures || []).map(e => [String(e.factorId), Number(e.beta)]).sort((a,b)=>a[0].localeCompare(b[0])),
+      alpha: Number(etf.specificRisk?.alpha || 0),
+      residualVolatility: Number(etf.specificRisk?.residualVolatility ?? etf.specificRisk?.annualizedVolatility ?? 0)
+    });
+    const activeIsins = new Set(orderedIsins);
+    const matching = factorSnapshot.etfs.filter(e => activeIsins.has(normalizeIsin(e.isin)));
+    for (let i = 0; i < matching.length; i++) {
+      for (let j = i+1; j < matching.length; j++) {
+        if (signature(matching[i]) === signature(matching[j])) {
+          factorSpecificationWarnings.push({ code: 'IDENTICAL_FACTOR_SPECIFICATION',
+            isinA: normalizeIsin(matching[i].isin), isinB: normalizeIsin(matching[j].isin),
+            note: 'Identical current factor exposures, alpha and residual volatility; independent residual draws can still produce different paths.' });
+        }
+      }
+    }
+    const stylePremiaWarnings = factorSnapshot.factors
+      .filter(f => ['VALUE','MOMENTUM','QUALITY','LOW_VOLATILITY','GROWTH'].includes(String(f.code).toUpperCase()) &&
+        f.returnMode === 'compounded_return')
+      .map(f => ({ code: 'VERIFY_INCREMENTAL_STYLE_PREMIUM', factorCode: f.code,
+        note: 'Confirm that expected returns are incremental premiums rather than full equity returns.' }));
+    let manifestRecord = null;
+    try {
+      manifestRecord = await MonteCarloRunManifest.findByPk(run.runId, { raw:true });
+    } catch(error) {
+      if(error?.parent?.code !== '42P01') throw error;
+      // Migration not deployed yet; historical runs remain inspectable.
+    }
+    const beforeV3 = performance.now();
+    const v3Audit = await buildMonteCarloV3Audit({
+      factorSnapshot,
+      etfs, correlations, conditionalCorrelations, scenarios: counts,
+      scenarioBytes, pathCount, monthCount
+    });
+    const beforeV4 = performance.now();
+    const verifiedManifest = manifestRecord &&
+      verifyGenerationManifest(manifestRecord, run).status === 'PASS';
+    const v4Validation = calculateMomentValidation({
+      snapshot: verifiedManifest ? manifestRecord.manifest.factorSnapshot : factorSnapshot,
+      etfs, correlations, scenarioBytes, intensity, run
+    });
+    if(verifiedManifest) {
+      v4Validation.configurationProvenance = 'VERIFIED_GENERATION_TIME_MANIFEST';
+      v4Validation.generationTimeSha256 = manifestRecord.manifestSha256;
+      // Mathematical consistency still requires formal statistical acceptance tests.
+    }
+    const v5Foundation = buildMonteCarloV5Foundation({ factorSnapshot: verifiedManifest ? manifestRecord.manifest.factorSnapshot : factorSnapshot,
+      run, scenarios: counts, v3Audit, v4Validation, manifestRecord });
+    const v6StylePremiumAudit = auditStylePremiums({manifestRecord,
+      manifestVerification: verifyGenerationManifest(manifestRecord,run)});
+    const diagnosticFinished = performance.now();
+    return {
+      version: 5, v3Audit, v4Validation, v5Foundation, v6StylePremiumAudit,
+      performance: { totalMs: Math.round(diagnosticFinished - diagnosticStarted),
+        dbReadMs: Math.round(afterDbRead - beforeDbRead),
+        simulationAnalysisMs: Math.round(beforeV3 - afterDbRead),
+        economicAuditMs: Math.round(beforeV4 - beforeV3),
+        momentValidationMs: Math.round(diagnosticFinished - beforeV4) },
+      generatedAt: new Date().toISOString(), source: 'persisted_active_market_universe_v2',
+      readOnly: true, run: { runId: run.runId, seed: run.seed, pathCount, monthCount,
+        generatedAt: run.generatedAt, assetCount: run.assetCount },
+      conventions: {
+        returns: 'simple monthly returns in EUR only if source vectors were generated in EUR',
+        volatility: 'sampled pooled monthly standard deviation times sqrt(12)',
+        cagr: 'per-path terminal geometric annualized return, quantiles across paths',
+        drawdown: 'per-path peak-to-trough decline, quantiles across paths',
+        scenarioMean: 'arithmetic monthly mean times 12; not a geometric CAGR',
+        correlations: 'Pearson on pooled simulated monthly returns; includes macro-regime variation',
+        caveat: 'Diagnostics describe persisted simulations, not theoretical factor targets or historical calibration.'
+      },
+      scenarios: counts, invalidIntensities, etfs, correlations, conditionalCorrelations,
+      factorSpecificationWarnings, stylePremiaWarnings
+    };
+  }
+
   static async getActiveRun() {
     const cachedRun = marketUniverseV2Cache.getRun();
     if (cachedRun) return cachedRun;
@@ -127,6 +414,10 @@ class MarketUniverseV2Service {
         });
       }
 
+      // Freeze all generation inputs BEFORE drawing any random numbers.
+      const generationManifest = createGenerationManifest({
+        factorSnapshot, macroSnapshot, seed, pathCount, monthCount, assetOrder
+      });
       if (!run) {
         run = await MarketUniverseRunV2.create({
           seed: Number(seed), pathCount: Number(pathCount), monthCount: Number(monthCount),
@@ -135,6 +426,14 @@ class MarketUniverseV2Service {
       } else {
         await run.update({ assetCount: operationalEtfs.length, assetOrder, generationProgress: 1 });
       }
+
+      // Fail closed if the V5 manifest migration is absent; never produce
+      // an untraceable new simulation. The database trigger prevents mutation.
+      await MonteCarloRunManifest.create({
+        runId:run.runId,schemaVersion:5,
+        manifestSha256:generationManifest.sha256,
+        manifest:generationManifest.manifest
+      });
 
       const totalValues = Number(pathCount) * Number(monthCount);
       const returnsByIsin = new Map(assetOrder.map((isin) => [isin, new Float32Array(totalValues)]));
@@ -152,7 +451,15 @@ class MarketUniverseV2Service {
           const generated = runtime.generateMonthlyEtfReturnsFromFactors(factorSnapshot, month.scenario, month.intensity, () => random.next());
           for (const entry of generated.etfReturns) {
             const target = returnsByIsin.get(normalizeIsin(entry.isin));
-            if (target) target[flatIndex] = Number(entry.monthlyReturn);
+            const value = Number(entry.monthlyReturn);
+            if (!Number.isFinite(value) || value <= -1) {
+              throw Object.assign(new Error('Invalid ETF monthly return generated; refusing to persist a non-compoundable simulation'), {
+                code: 'INVALID_GENERATED_ETF_RETURN',
+                statusCode: 422,
+                details: { isin: entry.isin, pathId, monthIndex, value }
+              });
+            }
+            if (target) target[flatIndex] = value;
           }
         }
         if ((pathId + 1) % 10 === 0 || pathId + 1 === Number(pathCount)) {
@@ -165,7 +472,29 @@ class MarketUniverseV2Service {
         const vector = returnsByIsin.get(isin);
         return { runId: run.runId, etfId: etf.id, isin, returnsBinary: float32ToBuffer(vector), valueCount: totalValues };
       });
-      await MarketUniverseEtfV2.bulkCreate(rows, { validate: true });
+      // Persist each binary vector separately. A single bulk INSERT with 26 large
+      // bytea literals can saturate the PostgreSQL connection and stall at 95%.
+      // Keep the prior ACTIVE run untouched until every ETF is persisted.
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const startedAt = performance.now();
+        try {
+          await MarketUniverseEtfV2.create(row, { validate: true });
+        } catch (error) {
+          console.error('[MU V2 ETF persistence failed]', {
+            runId: run.runId, isin: row.isin, index: index + 1,
+            total: rows.length, error: error.message
+          });
+          throw error;
+        }
+        const progress = 95 + ((index + 1) / rows.length) * 4;
+        await run.update({ generationProgress: progress });
+        console.info('[MU V2 ETF persisted]', {
+          runId: run.runId, isin: row.isin, index: index + 1,
+          total: rows.length, durationMs: Math.round(performance.now() - startedAt),
+          progressPercentage: Number(progress.toFixed(2))
+        });
+      }
       await run.update({
         scenarioBinary: Buffer.from(scenarios),
         intensityBinary: float32ToBuffer(intensities),
@@ -178,10 +507,8 @@ class MarketUniverseV2Service {
       await run.update({ active: true, status: 'ACTIVE', generationProgress: 100 });
       marketUniverseV2Cache.invalidate();
       marketUniverseV2Cache.setRun(run);
-      if (previous && previous.runId !== run.runId) {
-        await MarketUniverseEtfV2.destroy({ where: { runId: previous.runId } });
-        await previous.destroy();
-      }
+      // Keep the previous completed run for reproducible before/after comparisons.
+      // Only the newest run is active; historical run data remain immutable.
       return { success: true, version: 2, runId: run.runId, pathCount: Number(pathCount), monthCount: Number(monthCount), assetCount: rows.length, rowCount: rows.length };
     } catch (error) {
       if (run) await run.update({ status: 'FAILED', active: false }).catch(() => {});
