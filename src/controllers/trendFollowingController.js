@@ -148,6 +148,7 @@ const normalizeCriterion = (row) => ({
   benchmarkIsin: String(row?.benchmarkIsin || '').trim().toUpperCase(),
   thirdIsin: String(row?.thirdIsin || '').trim().toUpperCase(),
   signal: row?.signal === 'buy' ? 'buy' : 'sell',
+  enabled: row?.enabled !== false,
   thresholdPercent: ['sma-200','dual-sma-50-200'].includes(row?.strategyKey) ? Number(row?.thresholdPercent ?? 0) : 0
 });
 
@@ -215,6 +216,7 @@ exports.putCriteria = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Elenco criteri non valido' });
     }
     const criteria = input.map(normalizeCriterion);
+    if (input.some(row => row.enabled != null && typeof row.enabled !== 'boolean')) return res.status(400).json({ success: false, error: 'Stato attivazione strategia non valido' });
     if (criteria.some(row => !Number.isFinite(row.thresholdPercent) || row.thresholdPercent < -100 || row.thresholdPercent > 100 || (row.signal === 'sell' && row.thresholdPercent > 0) || (row.signal === 'buy' && row.thresholdPercent < 0))) {
       return res.status(400).json({ success: false, error: 'Soglia non valida: vendita <= 0%, acquisto >= 0%, valore numerico' });
     }
