@@ -215,8 +215,8 @@ exports.putCriteria = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Elenco criteri non valido' });
     }
     const criteria = input.map(normalizeCriterion);
-    if (criteria.some(row => !Number.isInteger(row.thresholdPercent) || row.thresholdPercent < -100 || row.thresholdPercent > 100 || (row.signal === 'sell' && row.thresholdPercent > 0) || (row.signal === 'buy' && row.thresholdPercent < 0))) {
-      return res.status(400).json({ success: false, error: 'Soglia non valida: vendita <= 0%, acquisto >= 0%, solo interi' });
+    if (criteria.some(row => !Number.isFinite(row.thresholdPercent) || row.thresholdPercent < -100 || row.thresholdPercent > 100 || (row.signal === 'sell' && row.thresholdPercent > 0) || (row.signal === 'buy' && row.thresholdPercent < 0))) {
+      return res.status(400).json({ success: false, error: 'Soglia non valida: vendita <= 0%, acquisto >= 0%, valore numerico' });
     }
     if (criteria.some(row => !row.strategyKey)) {
       return res.status(400).json({ success: false, error: 'Non salvare criteri senza strategia selezionata' });
