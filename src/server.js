@@ -85,6 +85,44 @@ app.use('/api/kpi', kpiRoutes);
 app.use('/api/rebalance', rebalanceRoutes);
 app.use('/api/quotations', quotationRoutes);
 app.use('/api/market-universe', marketUniverseRoutes);
+// Monte Carlo snapshot consumed by the official frontend simulation engine.
+app.post('/api/monte-carlo/snapshot', require('./middleware/currentUser'), async (req, res, next) => {
+  try {
+    const { Op, QueryTypes } = require('sequelize');
+    const ETF = require('./models/ETF');
+    const EtfMacroStatistics = require('./models/EtfMacroStatistics');
+    const StructuralProbability = require('./models/StructuralProbability');
+    const TransitionMatrix = require('./models/TransitionMatrix');
+    const ScenarioInertiaConfiguration = require('./models/ScenarioInertiaConfiguration');
+    const ScenarioIntensityConfiguration = require('./models/ScenarioIntensityConfiguration');
+    const MonteCarloGlobalProperty = require('./models/MonteCarloGlobalProperty');
+    const { buildMonteCarloSnapshot, MonteCarloSnapshotValidationError } = require('./utils/monteCarloSnapshot');
+    const isins = req.body?.isins;
+    if (!Array.isArray(isins) || !isins.length || isins.some(isin => typeof isin !== 'string' || !isin.trim()) || new Set(isins).size !== isins.length) {
+      return res.status(400).json({ success: false, error: { message: 'Elenco ISIN non valido o duplicato' } });
+    }
+    const [etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties, correlations] = await Promise.all([
+      ETF.findAll({ where: { isin: { [Op.in]: isins } }, attributes: ['isin', 'name', 'nickname'], raw: true }),
+      EtfMacroStatistics.findAll({ where: { isin: { [Op.in]: isins } }, raw: true }),
+      StructuralProbability.findAll({ raw: true }),
+      TransitionMatrix.findAll({ raw: true }),
+      ScenarioInertiaConfiguration.findAll({ raw: true }),
+      ScenarioIntensityConfiguration.findAll({ raw: true }),
+      MonteCarloGlobalProperty.findAll({ raw: true }),
+      sequelize.query('SELECT "isin1", "isin2", "expansion", "recession", "stagflation", "soft_landing" FROM "etf_correlations" WHERE "isin1" IN (:isins) AND "isin2" IN (:isins)', {
+        replacements: { isins }, type: QueryTypes.SELECT
+      })
+    ]);
+    const snapshot = buildMonteCarloSnapshot({ isins, etfs, macroStatistics, structuralProbabilities, transitions, inertiaConfigurations, intensityConfigurations, globalProperties, correlations });
+    return res.json({ success: true, data: snapshot });
+  } catch (error) {
+    if (error?.name === 'MonteCarloSnapshotValidationError') {
+      return res.status(error.statusCode || 422).json({ success: false, error: { code: error.code, message: error.message, details: error.details } });
+    }
+    next(error);
+  }
+});
+
 app.use('/api/real-portfolios', realPortfolioRoutes);
 app.use('/api/trend-following', trendFollowingRoutes);
 app.use('/api/factor-engine', factorEngineRoutes);
