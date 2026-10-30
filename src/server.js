@@ -148,6 +148,10 @@ async function ensureTrendFollowingSchema() {
 async function start() {
   const db = await connectDB();
   if (!db) throw new Error('Connessione al database non disponibile');
+  // Additive, idempotent schema update; existing users retain NULL values.
+  await sequelize.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS email VARCHAR(254)');
+  await sequelize.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS birth_date DATE');
+
   await ensureTrendFollowingSchema();
   app.listen(PORT, () => {
     console.log(`Investment Lab Service running on port ${PORT}`);
