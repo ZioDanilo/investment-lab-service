@@ -11,7 +11,7 @@ router.get('/', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const { atleta, numero, taglia, nickname, ruolo } = req.body || {};
-    if (typeof atleta !== 'string' || !atleta.trim() || !Number.isInteger(numero) || numero < 1 || numero > 99 || !TAGLIE.includes(taglia) || typeof nickname !== 'string' || !nickname.trim() || nickname.trim().length > 100 || !['Giocatore', 'Libero'].includes(ruolo))
+    if (typeof atleta !== 'string' || !atleta.trim() || !Number.isInteger(numero) || numero < 1 || numero > 99 || !TAGLIE.includes(taglia) || typeof nickname !== 'string' || !nickname.trim() || nickname.trim().length > 100 || !['Tecnico', 'Libero'].includes(ruolo))
       return res.status(400).json({ error: 'Atleta, numero, taglia, nickname o ruolo non validi' });
     const row = await Giocatore.findOne({ where: { atleta: atleta.trim() } });
     if (!row) return res.status(404).json({ error: 'Giocatore non trovato' });
