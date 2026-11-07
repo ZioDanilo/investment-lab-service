@@ -190,6 +190,7 @@ async function start() {
   await sequelize.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS email VARCHAR(254)');
   await sequelize.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS birth_date DATE');
 
+  await sequelize.query('ALTER TABLE public.giocatori ADD COLUMN IF NOT EXISTS nickname VARCHAR(100)');
   await ensureTrendFollowingSchema();
   app.listen(PORT, () => {
     console.log(`Investment Lab Service running on port ${PORT}`);
