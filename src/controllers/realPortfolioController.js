@@ -548,7 +548,7 @@ exports.getPortfolioHistory = async (req, res, next) => {
     for (const t of trades) if (String(t.operationDate)>=firstDate && String(t.operationDate)<=today) dates.add(String(t.operationDate));
     const calendar = [...dates].sort();
     const holdings = new Map(), lastTrades = new Map(), cursors = new Map(), latest = new Map();
-    let tradeIndex=0, netContributions=0, realizedTaxes=0, twrIndex=100, previousValue=null;
+    let tradeIndex=0, netContributions=0, realizedTaxes=0, cashBalance=0, twrIndex=100, previousValue=null;
     const points=[],incompleteDays=[];
     for (const date of calendar) {
       const previousHoldings = new Map(holdings);
@@ -556,15 +556,27 @@ exports.getPortfolioHistory = async (req, res, next) => {
       while (tradeIndex<trades.length && String(trades[tradeIndex].operationDate)<=date) {
         const t=trades[tradeIndex++],qty=Number(t.quantity),price=Number(t.unitPrice);
         if (t.operationType==='tax') {
-          if(Number.isFinite(price)) realizedTaxes+=price*(Number.isFinite(qty)?qty:1);
+          if(Number.isFinite(price)) {
+            const tax = price*(Number.isFinite(qty)?qty:1);
+            realizedTaxes+=tax;
+            cashBalance-=tax;
+          }
           continue;
         }
         if(!Number.isFinite(qty)||!Number.isFinite(price))continue;
         const key=String(t.etfId),delta=t.operationType==='buy'?qty:-qty;
         holdings.set(key,(holdings.get(key)||0)+delta);
         lastTrades.set(key,{date:String(t.operationDate),price});
-        dailyFlow+=delta*price;
-        netContributions+=delta*price;
+        // Sale proceeds remain as portfolio cash. Purchases consume that cash first;
+        // any shortfall is inferred as a new external contribution.
+        const tradeAmount=qty*price;
+        if(t.operationType==='sell') cashBalance+=tradeAmount;
+        else {
+          const contribution=Math.max(0,tradeAmount-cashBalance);
+          netContributions+=contribution;
+          dailyFlow+=contribution;
+          cashBalance+=contribution-tradeAmount;
+        }
       }
       for(const [isin,rows] of byIsin) {
         let cursor=cursors.get(isin)||0;
@@ -589,7 +601,7 @@ exports.getPortfolioHistory = async (req, res, next) => {
       };
       const end=evaluate(holdings);
       const complete=end.missing===0;
-      const value=complete?Number(end.value.toFixed(2)):null;
+      const value=complete?Number((end.value+cashBalance).toFixed(2)):null;
       // Daily cash-flow-neutral chain-linking: estimate the value immediately
       // before transactions at today's available prices. Excludes net deposits.
       // Trade execution prices may differ from close; daily TWR is approximate.
@@ -602,6 +614,7 @@ exports.getPortfolioHistory = async (req, res, next) => {
       points.push({
         date,month:date.slice(0,7),marketValue:value,
         netContributions:Number(netContributions.toFixed(2)),
+        cashBalance:Number(cashBalance.toFixed(2)),
         dailyFlow:Number(dailyFlow.toFixed(2)),
         realizedTaxes:Number(realizedTaxes.toFixed(2)),
         performanceIndex:Number(twrIndex.toFixed(5)),
