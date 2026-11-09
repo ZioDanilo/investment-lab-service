@@ -384,13 +384,51 @@ exports.getLatestOperations = async (req, res, next) => {
 };
 
 
+// Reconstruct realized gains at weighted-average cost and subtract actual recorded tax rows.
+// Kept separate from gainLoss so Home continues to display only open-position P&L.
+const buildRealizedNetGain = async (portfolioId) => {
+  const operations = await RealPortfolioOperation.findAll({
+    where: { realPortfolioId: portfolioId, operationType: { [Op.in]: ['buy', 'sell', 'tax'] } },
+    attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
+    order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
+    raw: true
+  });
+  const positions = new Map();
+  let realized = 0;
+  let taxes = 0;
+  for (const op of operations) {
+    const quantity = Number(op.quantity);
+    const price = Number(op.unitPrice);
+    if (op.operationType === 'tax') {
+      taxes += price * (Number.isFinite(quantity) ? quantity : 1);
+      continue;
+    }
+    if (!Number.isFinite(quantity) || !Number.isFinite(price)) continue;
+    const key = String(op.etfId);
+    const position = positions.get(key) || { quantity: 0, cost: 0 };
+    if (op.operationType === 'buy') {
+      position.quantity += quantity;
+      position.cost += quantity * price;
+    } else {
+      const averageCost = position.quantity > 0 ? position.cost / position.quantity : 0;
+      realized += quantity * (price - averageCost);
+      position.quantity -= quantity;
+      position.cost -= quantity * averageCost;
+      if (Math.abs(position.quantity) < 1e-8) { position.quantity = 0; position.cost = 0; }
+    }
+    positions.set(key, position);
+  }
+  return realized - taxes;
+};
+
 const buildMarketValueSummary = async (portfolio) => {
   const positions = await RealPortfolioEtf.findAll({
     where: { realPortfolioId: portfolio.id },
     include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin'] }]
   });
+  const realizedNetGain = await buildRealizedNetGain(portfolio.id);
   if (!positions.length) {
-    return { portfolioId: portfolio.id, marketValue: 0, investedCapital: 0, gainLoss: 0, gainLossPercent: 0, quotationDate: null };
+    return { portfolioId: portfolio.id, marketValue: 0, investedCapital: 0, gainLoss: 0, gainLossPercent: 0, totalGainLoss: realizedNetGain, totalGainLossPercent: null, quotationDate: null };
   }
 
   const basis = await buildCurrentCostBasis(portfolio.id);
@@ -416,6 +454,8 @@ const buildMarketValueSummary = async (portfolio) => {
   const gainLoss = marketValue - investedCapital;
   return {
     portfolioId: portfolio.id, marketValue, investedCapital, gainLoss,
+    totalGainLoss: gainLoss + realizedNetGain,
+    totalGainLossPercent: investedCapital > 0 ? (gainLoss + realizedNetGain) / investedCapital * 100 : null,
     gainLossPercent: investedCapital > 0 ? gainLoss / investedCapital * 100 : 0,
     quotationDate: usedDates.length === positions.length ? usedDates.sort()[0] : null
   };
