@@ -11,7 +11,7 @@ exports.getQuotationHistory=async(req,res,next)=>{
     const isin=String(req.query.isin||'').trim().toUpperCase();
     if(!isin)return res.status(400).json({success:false,error:'ISIN obbligatorio'});
     const limit=Math.min(5000,Math.max(1,Number.parseInt(req.query.limit,10)||30));
-    const data=await EtfQuotation.findAll({where:{isin},attributes:['isin','quotation','date'],order:[['date','DESC']],limit,raw:true});
+    const data=await EtfQuotation.findAll({where:{isin,quotation:{[Op.ne]:null}},attributes:['isin','quotation','date'],order:[['date','DESC']],limit,raw:true});
     return noCache(res).json({success:true,data});
   }catch(error){next(error);}
 };
