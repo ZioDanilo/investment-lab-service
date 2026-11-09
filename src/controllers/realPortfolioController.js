@@ -552,6 +552,7 @@ exports.getPortfolioHistory = async (req, res, next) => {
     const points=[],incompleteDays=[];
     for (const date of calendar) {
       const previousHoldings = new Map(holdings);
+      const previousCashBalance = cashBalance;
       let dailyFlow=0;
       while (tradeIndex<trades.length && String(trades[tradeIndex].operationDate)<=date) {
         const t=trades[tradeIndex++],qty=Number(t.quantity),price=Number(t.unitPrice);
@@ -606,8 +607,8 @@ exports.getPortfolioHistory = async (req, res, next) => {
       // before transactions at today's available prices. Excludes net deposits.
       // Trade execution prices may differ from close; daily TWR is approximate.
       const before=evaluate(previousHoldings);
-      if(previousValue!==null && previousValue>0 && before.missing===0 && before.value>0) {
-        twrIndex*=before.value/previousValue;
+      if(previousValue!==null && previousValue>0 && before.missing===0 && before.value+previousCashBalance>0) {
+        twrIndex*=(before.value+previousCashBalance)/previousValue;
       }
       previousValue=value;
       if(!complete)incompleteDays.push(date);
