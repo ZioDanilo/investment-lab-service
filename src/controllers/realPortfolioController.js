@@ -384,13 +384,51 @@ exports.getLatestOperations = async (req, res, next) => {
 };
 
 
+// Reconstruct realized gains at weighted-average cost and subtract actual recorded tax rows.
+// Kept separate from gainLoss so Home continues to display only open-position P&L.
+const buildRealizedNetGain = async (portfolioId) => {
+  const operations = await RealPortfolioOperation.findAll({
+    where: { realPortfolioId: portfolioId, operationType: { [Op.in]: ['buy', 'sell', 'tax'] } },
+    attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
+    order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
+    raw: true
+  });
+  const positions = new Map();
+  let realized = 0;
+  let taxes = 0;
+  for (const op of operations) {
+    const quantity = Number(op.quantity);
+    const price = Number(op.unitPrice);
+    if (op.operationType === 'tax') {
+      taxes += price * (Number.isFinite(quantity) ? quantity : 1);
+      continue;
+    }
+    if (!Number.isFinite(quantity) || !Number.isFinite(price)) continue;
+    const key = String(op.etfId);
+    const position = positions.get(key) || { quantity: 0, cost: 0 };
+    if (op.operationType === 'buy') {
+      position.quantity += quantity;
+      position.cost += quantity * price;
+    } else {
+      const averageCost = position.quantity > 0 ? position.cost / position.quantity : 0;
+      realized += quantity * (price - averageCost);
+      position.quantity -= quantity;
+      position.cost -= quantity * averageCost;
+      if (Math.abs(position.quantity) < 1e-8) { position.quantity = 0; position.cost = 0; }
+    }
+    positions.set(key, position);
+  }
+  return realized - taxes;
+};
+
 const buildMarketValueSummary = async (portfolio) => {
   const positions = await RealPortfolioEtf.findAll({
     where: { realPortfolioId: portfolio.id },
     include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin'] }]
   });
+  const realizedNetGain = await buildRealizedNetGain(portfolio.id);
   if (!positions.length) {
-    return { portfolioId: portfolio.id, marketValue: 0, investedCapital: 0, gainLoss: 0, gainLossPercent: 0, quotationDate: null };
+    return { portfolioId: portfolio.id, marketValue: 0, investedCapital: 0, gainLoss: 0, gainLossPercent: 0, totalGainLoss: realizedNetGain, totalGainLossPercent: null, quotationDate: null };
   }
 
   const basis = await buildCurrentCostBasis(portfolio.id);
@@ -416,6 +454,8 @@ const buildMarketValueSummary = async (portfolio) => {
   const gainLoss = marketValue - investedCapital;
   return {
     portfolioId: portfolio.id, marketValue, investedCapital, gainLoss,
+    totalGainLoss: gainLoss + realizedNetGain,
+    totalGainLossPercent: investedCapital > 0 ? (gainLoss + realizedNetGain) / investedCapital * 100 : null,
     gainLossPercent: investedCapital > 0 ? gainLoss / investedCapital * 100 : 0,
     quotationDate: usedDates.length === positions.length ? usedDates.sort()[0] : null
   };
@@ -508,23 +548,36 @@ exports.getPortfolioHistory = async (req, res, next) => {
     for (const t of trades) if (String(t.operationDate)>=firstDate && String(t.operationDate)<=today) dates.add(String(t.operationDate));
     const calendar = [...dates].sort();
     const holdings = new Map(), lastTrades = new Map(), cursors = new Map(), latest = new Map();
-    let tradeIndex=0, netContributions=0, realizedTaxes=0, twrIndex=100, previousValue=null;
+    let tradeIndex=0, netContributions=0, realizedTaxes=0, cashBalance=0, twrIndex=100, previousValue=null;
     const points=[],incompleteDays=[];
     for (const date of calendar) {
       const previousHoldings = new Map(holdings);
+      const previousCashBalance = cashBalance;
       let dailyFlow=0;
       while (tradeIndex<trades.length && String(trades[tradeIndex].operationDate)<=date) {
         const t=trades[tradeIndex++],qty=Number(t.quantity),price=Number(t.unitPrice);
         if (t.operationType==='tax') {
-          if(Number.isFinite(price)) realizedTaxes+=price*(Number.isFinite(qty)?qty:1);
+          if(Number.isFinite(price)) {
+            const tax = price*(Number.isFinite(qty)?qty:1);
+            realizedTaxes+=tax;
+            cashBalance-=tax;
+          }
           continue;
         }
         if(!Number.isFinite(qty)||!Number.isFinite(price))continue;
         const key=String(t.etfId),delta=t.operationType==='buy'?qty:-qty;
         holdings.set(key,(holdings.get(key)||0)+delta);
         lastTrades.set(key,{date:String(t.operationDate),price});
-        dailyFlow+=delta*price;
-        netContributions+=delta*price;
+        // Sale proceeds remain as portfolio cash. Purchases consume that cash first;
+        // any shortfall is inferred as a new external contribution.
+        const tradeAmount=qty*price;
+        if(t.operationType==='sell') cashBalance+=tradeAmount;
+        else {
+          const contribution=Math.max(0,tradeAmount-cashBalance);
+          netContributions+=contribution;
+          dailyFlow+=contribution;
+          cashBalance+=contribution-tradeAmount;
+        }
       }
       for(const [isin,rows] of byIsin) {
         let cursor=cursors.get(isin)||0;
@@ -549,19 +602,20 @@ exports.getPortfolioHistory = async (req, res, next) => {
       };
       const end=evaluate(holdings);
       const complete=end.missing===0;
-      const value=complete?Number(end.value.toFixed(2)):null;
+      const value=complete?Number((end.value+cashBalance).toFixed(2)):null;
       // Daily cash-flow-neutral chain-linking: estimate the value immediately
       // before transactions at today's available prices. Excludes net deposits.
       // Trade execution prices may differ from close; daily TWR is approximate.
       const before=evaluate(previousHoldings);
-      if(previousValue!==null && previousValue>0 && before.missing===0 && before.value>0) {
-        twrIndex*=before.value/previousValue;
+      if(previousValue!==null && previousValue>0 && before.missing===0 && before.value+previousCashBalance>0) {
+        twrIndex*=(before.value+previousCashBalance)/previousValue;
       }
       previousValue=value;
       if(!complete)incompleteDays.push(date);
       points.push({
         date,month:date.slice(0,7),marketValue:value,
         netContributions:Number(netContributions.toFixed(2)),
+        cashBalance:Number(cashBalance.toFixed(2)),
         dailyFlow:Number(dailyFlow.toFixed(2)),
         realizedTaxes:Number(realizedTaxes.toFixed(2)),
         performanceIndex:Number(twrIndex.toFixed(5)),
