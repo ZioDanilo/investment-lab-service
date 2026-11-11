@@ -9,7 +9,8 @@ const RealPortfolioOperation = sequelize.define('RealPortfolioOperation', {
   etfId: { type: DataTypes.UUID, allowNull: true, field: 'etf_id' },
   operationDate: { type: DataTypes.DATEONLY, allowNull: false, field: 'operation_date' },
   quantity: { type: DataTypes.DECIMAL(24, 8), allowNull: false },
-  unitPrice: { type: DataTypes.DECIMAL(24, 8), allowNull: false, field: 'unit_price' }
+  unitPrice: { type: DataTypes.DECIMAL(24, 8), allowNull: false, field: 'unit_price' },
+  withholding: { type: DataTypes.DECIMAL(24, 2), allowNull: true, field: 'withholding' }
 }, {
   tableName: 'real_portfolio_operations',
   timestamps: true,
