@@ -222,6 +222,7 @@ exports.createOperation = async (req, res, next) => {
     }
 
     await portfolio.update({ dataModifica: new Date() }, { transaction });
+    await operation.reload({ transaction });
 
     await transaction.commit();
     res.status(201).json({
