@@ -6,5 +6,6 @@ module.exports = sequelize.define('Giocatore', {
   numero: { type: DataTypes.INTEGER, allowNull: true, unique: true, validate: { min: 1, max: 99 } },
   taglia: { type: DataTypes.STRING(5), allowNull: true },
   nickname: { type: DataTypes.STRING(100), allowNull: true },
+  pantaloncini: { type: DataTypes.STRING(5), allowNull: true },
   ruolo: { type: DataTypes.STRING(100), allowNull: true }
 }, { tableName: 'giocatori', underscored: true, timestamps: true });
