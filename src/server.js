@@ -191,6 +191,7 @@ async function start() {
   await sequelize.query('ALTER TABLE public.users ADD COLUMN IF NOT EXISTS birth_date DATE');
 
   await sequelize.query('ALTER TABLE public.giocatori ADD COLUMN IF NOT EXISTS nickname VARCHAR(100)');
+  await sequelize.query('ALTER TABLE public.giocatori ADD COLUMN IF NOT EXISTS pantaloncini VARCHAR(5)');
   // NULL distinguishes historical sales (tax stored as separate rows) from new sales.
   await sequelize.query('ALTER TABLE public.real_portfolio_operations ADD COLUMN IF NOT EXISTS withholding NUMERIC(24, 2)');
   await ensureTrendFollowingSchema();
