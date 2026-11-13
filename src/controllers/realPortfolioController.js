@@ -176,7 +176,8 @@ exports.createOperation = async (req, res, next) => {
     }
 
     const operation = await RealPortfolioOperation.create({
-      userId: req.user.id, realPortfolioId: portfolio.id, operationType, etfId, operationDate, quantity, unitPrice
+      userId: req.user.id, realPortfolioId: portfolio.id, operationType, etfId, operationDate, quantity, unitPrice,
+      withholding: operationType === 'sell' ? 0 : null
     }, { transaction });
 
     if (position) {
@@ -190,68 +191,38 @@ exports.createOperation = async (req, res, next) => {
       position = await RealPortfolioEtf.create({ realPortfolioId: portfolio.id, etfId, quantity: nextQuantity }, { transaction });
     }
 
-    // Rebuild tax withholdings from the complete chronological trade history.
-    // Historical inserts are therefore handled exactly like operations entered in date order.
-    await RealPortfolioOperation.destroy({
-      where: { userId: req.user.id, realPortfolioId: portfolio.id, operationType: 'tax' },
-      transaction
-    });
-
+    // Recalculate tax for new-format sales only. Legacy tax rows are preserved
+    // until the separate database cleanup, avoiding any double deduction.
     const chronologicalOperations = await RealPortfolioOperation.findAll({
-      where: {
-        userId: req.user.id,
-        realPortfolioId: portfolio.id,
-        operationType: { [Op.in]: ['buy', 'sell'] }
-      },
-      attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
+      where: { userId: req.user.id, realPortfolioId: portfolio.id, operationType: { [Op.in]: ['buy', 'sell'] } },
+      attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt', 'withholding'],
       order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
       transaction
     });
-
-    const TAX_RATE = 0.26;
     const fiscalPositions = new Map();
-    const taxRows = [];
-
     for (const historicalOperation of chronologicalOperations) {
       const historicalQuantity = Number(historicalOperation.quantity);
       const historicalUnitPrice = Number(historicalOperation.unitPrice);
-      const historicalValue = historicalQuantity * historicalUnitPrice;
       const fiscal = fiscalPositions.get(String(historicalOperation.etfId)) || { quantity: 0, cost: 0 };
-
       if (historicalOperation.operationType === 'buy') {
         fiscal.quantity += historicalQuantity;
-        fiscal.cost += historicalValue;
+        fiscal.cost += historicalQuantity * historicalUnitPrice;
       } else {
         const averageCost = fiscal.quantity > 0 ? fiscal.cost / fiscal.quantity : 0;
         const realizedGain = (historicalUnitPrice - averageCost) * historicalQuantity;
-        const withholding = realizedGain > 0 ? Math.round(realizedGain * TAX_RATE * 100) / 100 : 0;
-
+        const withholding = realizedGain > 0 ? Math.round(realizedGain * 0.26 * 100) / 100 : 0;
         fiscal.quantity -= historicalQuantity;
         fiscal.cost -= averageCost * historicalQuantity;
-        if (Math.abs(fiscal.quantity) < 1e-8) {
-          fiscal.quantity = 0;
-          fiscal.cost = 0;
-        }
-
-        if (withholding > 0) {
-          taxRows.push({
-            userId: req.user.id,
-            realPortfolioId: portfolio.id,
-            operationType: 'tax',
-            etfId: null,
-            operationDate: historicalOperation.operationDate,
-            quantity: 1,
-            unitPrice: withholding
-          });
+        if (Math.abs(fiscal.quantity) < 1e-8) { fiscal.quantity = 0; fiscal.cost = 0; }
+        if (historicalOperation.withholding !== null) {
+          await historicalOperation.update({ withholding }, { transaction });
         }
       }
-
       fiscalPositions.set(String(historicalOperation.etfId), fiscal);
     }
 
-    if (taxRows.length) await RealPortfolioOperation.bulkCreate(taxRows, { transaction });
-
     await portfolio.update({ dataModifica: new Date() }, { transaction });
+    await operation.reload({ transaction });
 
     await transaction.commit();
     res.status(201).json({
@@ -260,6 +231,7 @@ exports.createOperation = async (req, res, next) => {
         id: operation.id, portfolioId: operation.realPortfolioId, operationType: operation.operationType,
         etf: { id: etf.id, isin: etf.isin, ticker: etf.ticker, name: etf.name, nickname: etf.nickname },
         operationDate: operation.operationDate, quantity: operation.quantity, unitPrice: operation.unitPrice,
+        withholding: operation.withholding,
         portfolioQuantity: nextQuantity
       }
     });
@@ -343,14 +315,14 @@ exports.getOperations = async (req, res, next) => {
     const portfolio = await Portafoglio.findOne({ where: { id: req.params.id, userId: req.user.id, tipo: 'reale' } });
     if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
     const operations = await RealPortfolioOperation.findAll({
-      where: { userId: req.user.id, realPortfolioId: portfolio.id },
+      where: { userId: req.user.id, realPortfolioId: portfolio.id, operationType: { [Op.in]: ['buy', 'sell'] } },
       include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname'] }],
       order: [['operationDate', 'DESC'], ['createdAt', 'DESC']]
     });
     res.status(200).json({ success: true, data: operations.map((o) => ({
       id: o.id, operationType: o.operationType, operationDate: o.operationDate,
-      quantity: o.quantity, unitPrice: o.unitPrice,
-      total: o.operationType === 'tax' ? -Number(o.unitPrice) : Number(o.quantity) * Number(o.unitPrice),
+      quantity: o.quantity, unitPrice: o.unitPrice, withholding: Number(o.withholding ?? 0),
+      total: Number(o.quantity) * Number(o.unitPrice) - Number(o.withholding ?? 0),
       etf: o.etf
     })) });
   } catch (error) { next(error); }
@@ -365,7 +337,7 @@ exports.getLatestOperations = async (req, res, next) => {
     if (!portfolio) return res.status(404).json({ success: false, error: 'Portafoglio reale non trovato' });
 
     const operations = await RealPortfolioOperation.findAll({
-      where: { userId: req.user.id, realPortfolioId: portfolio.id },
+      where: { userId: req.user.id, realPortfolioId: portfolio.id, operationType: { [Op.in]: ['buy', 'sell'] } },
       include: [{ model: ETF, as: 'etf', attributes: ['id', 'isin', 'ticker', 'name', 'nickname'] }],
       order: [['operationDate', 'DESC'], ['createdAt', 'DESC']],
       limit: 5
@@ -377,7 +349,8 @@ exports.getLatestOperations = async (req, res, next) => {
       operationDate: o.operationDate,
       quantity: o.quantity,
       unitPrice: o.unitPrice,
-      total: o.operationType === 'tax' ? -Number(o.unitPrice) : Number(o.quantity) * Number(o.unitPrice),
+      withholding: Number(o.withholding ?? 0),
+      total: Number(o.quantity) * Number(o.unitPrice) - Number(o.withholding ?? 0),
       etf: o.etf
     })) });
   } catch (error) { next(error); }
@@ -389,7 +362,7 @@ exports.getLatestOperations = async (req, res, next) => {
 const buildRealizedNetGain = async (portfolioId) => {
   const operations = await RealPortfolioOperation.findAll({
     where: { realPortfolioId: portfolioId, operationType: { [Op.in]: ['buy', 'sell', 'tax'] } },
-    attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt'],
+    attributes: ['id', 'operationType', 'etfId', 'quantity', 'unitPrice', 'operationDate', 'createdAt', 'withholding'],
     order: [['operationDate', 'ASC'], ['createdAt', 'ASC'], ['id', 'ASC']],
     raw: true
   });
@@ -412,6 +385,7 @@ const buildRealizedNetGain = async (portfolioId) => {
     } else {
       const averageCost = position.quantity > 0 ? position.cost / position.quantity : 0;
       realized += quantity * (price - averageCost);
+      taxes += Number(op.withholding ?? 0);
       position.quantity -= quantity;
       position.cost -= quantity * averageCost;
       if (Math.abs(position.quantity) < 1e-8) { position.quantity = 0; position.cost = 0; }
@@ -523,7 +497,7 @@ exports.getPortfolioHistory = async (req, res, next) => {
 
     const trades = await RealPortfolioOperation.findAll({
       where: { realPortfolioId: portfolio.id, userId: req.user.id, operationType: { [Op.in]: ['buy','sell','tax'] } },
-      attributes: ['id','operationType','etfId','operationDate','quantity','unitPrice','createdAt'],
+      attributes: ['id','operationType','etfId','operationDate','quantity','unitPrice','createdAt','withholding'],
       order: [['operationDate','ASC'],['createdAt','ASC'],['id','ASC']], raw: true
     });
     const firstTrade = trades.find(t => t.operationType === 'buy' || t.operationType === 'sell');
@@ -571,7 +545,11 @@ exports.getPortfolioHistory = async (req, res, next) => {
         // Sale proceeds remain as portfolio cash. Purchases consume that cash first;
         // any shortfall is inferred as a new external contribution.
         const tradeAmount=qty*price;
-        if(t.operationType==='sell') cashBalance+=tradeAmount;
+        if(t.operationType==='sell') {
+          const withholding=Number(t.withholding ?? 0);
+          realizedTaxes+=withholding;
+          cashBalance+=tradeAmount-withholding;
+        }
         else {
           const contribution=Math.max(0,tradeAmount-cashBalance);
           netContributions+=contribution;
